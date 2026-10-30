@@ -181,10 +181,66 @@ function knownFolder(text) {
   return hit ? { name: hit[0], kind: 'known', id: hit[0] } : null;
 }
 
-function openKnown(id) {
+async function openKnown(id) {
   if (id === 'explorer') return spawn('explorer.exe', [], { detached: true, stdio: 'ignore' }).on('error', () => {}).unref();
   if (id === 'recycle') return spawn('explorer.exe', ['shell:RecycleBinFolder'], { detached: true, stdio: 'ignore' }).on('error', () => {}).unref();
+  // cleanup = Disk Cleanup (หน้าต่าง, ไดรฟ์ระบบ) | ram = Task Manager + บีบ working set
+  if (id === 'cleanup') return diskCleanupSafe();
+  if (id === 'ram') return clearRamSafe();
   return shell.openPath(app.getPath(id));
+}
+
+// เคลียร์แรม: เปิด Task Manager (หน้าต่างค้างหลังปิดแชต) + พยายามบีบ working set
+async function clearRamSafe() {
+  const child = spawn('taskmgr.exe', [], {
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: false,
+  });
+  child.on('error', () => {}).unref();
+  child.unref();
+  // best-effort: ไม่ต้อง admin, ข้ามโปรเซสระบบ/Capri
+  powershell(
+    "Get-Process | Where-Object { $_.WorkingSet64 -gt 80MB -and $_.ProcessName -notmatch '^(explorer|dwm|csrss|winlogon|services|lsass|System|Idle|Capri|electron)$' } | ForEach-Object { try { $_.MinWorkingSet = [IntPtr]1048576 } catch {} }",
+    10000,
+  ).catch(() => null);
+  return undefined;
+}
+
+// ล้างไฟล์ขยะแบบ B: เปิดหน้าต่าง Disk Cleanup ให้เห็น
+// - ไดรฟ์เริ่มต้น = ไดรฟ์ที่ OS อยู่ (SystemDrive)
+// - แยก process ชัดเจน ปิดแชตแล้วหน้าต่างยังอยู่
+// - ลบ user temp ขนานไป (ไม่บล็อกการเปิดหน้าต่าง)
+async function diskCleanupSafe() {
+  const drive = (process.env.SystemDrive || 'C:').replace(/\\$/, '');
+  const letter = drive.replace(':', '');
+
+  // เปิด Disk Cleanup ก่อนทันที — มีหน้าต่างให้ติ๊ก/กด OK
+  const child = spawn('cleanmgr.exe', ['/d', letter], {
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: false,
+  });
+  child.on('error', () => {
+    spawn('cleanmgr.exe', [], { detached: true, stdio: 'ignore', windowsHide: false }).unref();
+  });
+  child.unref();
+
+  // ลบ user temp ขนาน (ไม่ต้องรอ) — ปลอดภัย ไม่ต้อง admin
+  powershell(
+    [
+      "$temps = @($env:TEMP, $env:TMP, (Join-Path $env:LOCALAPPDATA 'Temp'))",
+      'foreach ($t in $temps) {',
+      '  if (-not $t -or -not (Test-Path $t)) { continue }',
+      '  Get-ChildItem -LiteralPath $t -Force -ErrorAction SilentlyContinue | ForEach-Object {',
+      '    Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue',
+      '  }',
+      '}',
+    ].join('; '),
+    15000,
+  ).catch(() => null);
+
+  return undefined;
 }
 
 // What you asked to open: an app or a game, something on your desktop, else a folder by what it is.
@@ -197,7 +253,8 @@ async function find(text) {
 // your desktop, a folder by what it is.
 async function launch({ kind, id } = {}) {
   if (kind === 'known') {
-    if (!FOLDERS.some(([key]) => key === id)) throw new Error('not found');
+    const knownIds = new Set([...FOLDERS.map(([key]) => key), 'cleanup', 'ram']);
+    if (!knownIds.has(id)) throw new Error('not found');
     await openKnown(id);
     return undefined;
   }

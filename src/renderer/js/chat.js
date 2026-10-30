@@ -28,8 +28,12 @@ const LOADING_AFTER_MS = 5000;
 const CLOSE_TAG = /\[\[\s*close\s*:?\s*([^\]]*)\]\]/i; // [[close: AM Music]] at the end of her answer
 // "close", "shut down", "ferme", "quitte", "cierra", "fecha", "закрой"... in any of her languages
 const CLOSE_ASK = /\b(close|shut|quit|kill|exit)|ferm|quitt|coupe|arr[êe]t|cierr|cerra|fech|закр|выключ|ปิด|ปิดแอป|ปิดโปรแกรม/i;
-// her other tags: [[open: Spotify]], [[music: Bad Bunny]], [[media: next]], [[site: youtube.com]]
-const TAG = /\[\[\s*(open|music|media|site)\s*:\s*([^\]]*)\]\]/i;
+// "ล้างไฟล์ขยะ", "clean disk", "disk cleanup"...
+const CLEANUP_ASK = /(?:ล้าง\s*(?:ไฟล์\s*)?(?:ขยะ|ดิสก์)|clean\s*(?:up\s*)?(?:junk|disk)|disk\s*cleanup|nettoyer(?:\s+le\s+disque)?|limpiar(?:\s+(?:disco|basura))?|очист(?:ка|ить)?\s*(?:диска|мусор)?)/i;
+// "เคลียร์แรม", "clear RAM", "free memory", "ปลดแรม"...
+const CLEAR_RAM_ASK = /(?:เคลียร์\s*แรม|เคลียแรม|ล้าง\s*แรม|ปลด\s*แรม|clear\s*ram|free\s*(?:up\s*)?(?:ram|memory)|lib[eé]rer\s*(?:la\s*)?m[eé]moire|liberar\s*(?:ram|memoria)|освободить\s*(?:память|озу)|очистить\s*память)/i;
+// her other tags: [[open: Spotify]], [[music: Bad Bunny]], [[media: next]], [[site: youtube.com]], [[cleanup:]], [[ram:]]
+const TAG = /\[\[\s*(open|music|media|site|cleanup|ram)\s*:\s*([^\]]*)\]\]/i;
 // "open", "launch", "ouvre", "lance", "abre", "открой"... in any of her languages
 const OPEN_ASK = /\b(open|launch|start|run)\b|ouvr|lance|démarre|abre|abrir|inicia|ejecuta|executa|открой|запусти|เปิด|เปิดแอป|เปิดโปรแกรม|เรียกใช้/i;
 // what to do with the music playing, said plainly (only when it's about music, or said in a few words)
@@ -438,6 +442,8 @@ export class Chat {
     if (after && !VAGUE_SONG.test(after) && !HER_PICK.test(after)) return { kind: 'play', song: songOf(after.replace(/[\s.!?]+$/, '')), before: text.trim().slice(0, both.index) };
     const play = PLAY_ASK.exec(text.trim())?.[1];
     if (play && !VAGUE_SONG.test(play) && !HER_PICK.test(play)) return { kind: 'play', song: songOf(play.replace(/[\s.!?]+$/, '')) };
+    if (CLEAR_RAM_ASK.test(text)) return { kind: 'ram' };
+    if (CLEANUP_ASK.test(text)) return { kind: 'cleanup' };
     if (OPEN_ASK.test(text) && count <= 14) return { kind: 'open', text };
     return null;
   }
@@ -583,6 +589,8 @@ export class Chat {
     if (done) return this.addLine(answer, done.line, done.face);
     if (asked?.kind === 'remind') return undefined; // no time said: her answer asks when
     if (asked?.kind === 'close') return this.offerClose(asked.name, answer);
+    if (asked?.kind === 'cleanup') return this.offerCleanup(answer);
+    if (asked?.kind === 'ram') return this.offerClearRam(answer);
     if (asked && asked.kind !== 'open') return undefined; // music that didn't work out: nothing more to offer
     const closeTag = tagged(raw);
     if (closeTag) return wanted('close', text) ? this.offerClose(closeTag, answer) : undefined;
@@ -590,6 +598,8 @@ export class Chat {
     if (!tag) return undefined;
     const kind = tag[1].toLowerCase();
     const value = tag[2].trim();
+    if (kind === 'cleanup') return wanted('cleanup', text) ? this.offerCleanup(answer) : undefined;
+    if (kind === 'ram') return wanted('ram', text) ? this.offerClearRam(answer) : undefined;
     if (!value || !wanted(kind, text)) return undefined;
     if (kind === 'media') return MEDIA_ACTIONS.has(value.toLowerCase()) ? this.media(value.toLowerCase(), answer) : undefined;
     // a song she picked: on YouTube, the right video (on Spotify if that's what you said)
@@ -699,6 +709,70 @@ export class Chat {
     );
   }
 
+  // Disk Cleanup: ปุ่มยืนยันก่อนรัน — ใช้ข้อความของเราเอง (โมเดลเล็กมักสับสนกับถังขยะ)
+  offerCleanup(answer) {
+    const { t } = this;
+    if (!this.open || this.turn) return;
+    const line = t.cleanupAsk || 'ล้างไฟล์ขยะให้ไหม choom? กดยืนยันแล้วเปิด Disk Cleanup บนไดรฟ์ระบบ — ติ๊ก temp/thumbnails แล้วกด OK ได้เลย';
+    this.panel.setFace('smug');
+    this.panel.stream(line, { done: true });
+    this.panel.setActions(
+      [
+        { id: 'cleanup', label: t.cleanupIt || 'เปิด Disk Cleanup', primary: true },
+        { id: 'no', label: t.no },
+      ],
+      (id) => {
+        this.panel.setActions([]);
+        if (id === 'cleanup') this.runCleanup(line);
+      },
+    );
+  }
+
+  async runCleanup(answer) {
+    this.zap();
+    // ใช้ host.launch ที่มีอยู่แล้ว (IPC เดิม) ไม่ต้องเพิ่มเมธอดใหม่
+    const res = await this.host.launch({ kind: 'known', id: 'cleanup' });
+    this.addLine(
+      answer,
+      res?.ok !== false
+        ? (this.t.cleanupOpened || 'เปิด Disk Cleanup บนไดรฟ์ระบบแล้ว ติ๊กไฟล์ temp / thumbnails / cache ที่ปลอดภัย แล้วกด OK ได้เลย choom')
+        : `${this.t.failed} ${res?.error || ''}`,
+      res?.ok !== false ? 'laugh' : 'aside',
+    );
+  }
+
+  // เคลียร์แรม: ปุ่มยืนยันก่อนรัน — ข้อความของเราเอง ไม่ให้โมเดลปนกับถังขยะ
+  offerClearRam(answer) {
+    const { t } = this;
+    if (!this.open || this.turn) return;
+    const line = t.clearRamAsk || 'เคลียร์แรมให้ไหม? กดยืนยันแล้วจะเปิด Task Manager แล้วช่วยบีบแรมให้';
+    this.panel.setFace('smug');
+    this.panel.stream(line, { done: true });
+    this.panel.setActions(
+      [
+        { id: 'ram', label: t.clearRamIt || 'เคลียร์แรม', primary: true },
+        { id: 'no', label: t.no },
+      ],
+      (id) => {
+        this.panel.setActions([]);
+        if (id === 'ram') this.runClearRam(line);
+      },
+    );
+  }
+
+  async runClearRam(answer) {
+    this.zap();
+    // ใช้ host.launch ที่มีอยู่แล้ว (IPC เดิม) ไม่ต้องเพิ่มเมธอดใหม่
+    const res = await this.host.launch({ kind: 'known', id: 'ram' });
+    this.addLine(
+      answer,
+      res?.ok !== false
+        ? (this.t.clearRamOpened || 'บีบแรมให้แล้ว เปิด Task Manager ไว้ด้วย ไปปิดตัวกินแรมเองนะ choom')
+        : `${this.t.failed} ${res?.error || ''}`,
+      res?.ok !== false ? 'smug' : 'aside',
+    );
+  }
+
   async closeApp(app, force = false) {
     const { t, capri } = this;
     this.panel.setActions([]);
@@ -727,7 +801,7 @@ export class Chat {
   // What she can do on the PC when you ask (Windows), and nothing else.
   powers() {
     const lines = [
-      'Only when the user asks you to open an app, a game, a file or folder on their desktop, or a folder like Downloads, to play music, to control the music playing, or to open a website: say in a few words that you will, and end your answer with one tag: [[open: NAME]], [[music: ARTIST - SONG]] (it plays on YouTube; if they did not say which song, pick one that fits), [[media: ACTION]] (ACTION: pause, play, next, previous, volup, voldown or mute), or [[site: ADDRESS]]. Some of these get a button to confirm, so never say it is already done. Any other time, write no tag at all: there are no other tags.',
+      'Only when the user asks you to open an app, a game, a file or folder on their desktop, or a folder like Downloads, to play music, to control the music playing, to open a website, to clean junk files (Disk Cleanup — NOT the Recycle Bin), or to clear RAM / free memory (Task Manager — NOT the Recycle Bin): say in a few words that you will, and end your answer with one tag: [[open: NAME]], [[music: ARTIST - SONG]] (it plays on YouTube; if they did not say which song, pick one that fits), [[media: ACTION]] (ACTION: pause, play, next, previous, volup, voldown or mute), [[site: ADDRESS]], [[cleanup:]], or [[ram:]]. Important: "ล้างแรม" / clear RAM is memory, not trash; "ถังขยะ" is the Recycle Bin. Some of these get a button to confirm, so never say it is already done. Any other time, write no tag at all: there are no other tags.',
     ];
     if (this.apps.length) {
       const open = this.apps.map(({ name, label }) => (label && label !== name ? `${name} (${label})` : name)).join(', ');
@@ -854,6 +928,8 @@ function wanted(kind, text) {
   if (kind === 'media') return music || SOUND.test(text) || MEDIA_ASK.some(([, re]) => re.test(text));
   if (kind === 'site') return OPEN_ASK.test(text) || SITE.test(text);
   if (kind === 'close') return CLOSE_ASK.test(text);
+  if (kind === 'cleanup') return CLEANUP_ASK.test(text);
+  if (kind === 'ram') return CLEAR_RAM_ASK.test(text);
   return OPEN_ASK.test(text) || PLAY.test(text); // an app, or a game to play
 }
 
