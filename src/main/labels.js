@@ -109,6 +109,27 @@ const TRAY = {
     pcReact: 'Реагировать на мой ПК',
     cloudFree: 'бесплатно, онлайн', cloudSignin: 'Войти в Ollama (бесплатные облачные модели)…',
   },
+  th: {
+    name: 'ภาษาไทย',
+    online: (port) => `Capri — กำลังฟังอยู่ที่พอร์ต ${port}`,
+    teleport: 'เทเลพอร์ต', satellite: 'ดูดาวเทียม', demo: 'เล่นเดโม', help: 'ทำงานอย่างไร?',
+    report: 'รายงานภารกิจ', talk: 'คุยกับเธอ', custom: 'ทำให้เธอเป็นของคุณ…', chatModel: 'โมเดล AI', aiSetup: 'ตั้งค่ากับเธอ…', apiKey: 'คีย์ API หรือแอดเดรส…', noOllama: 'ไม่พบ Ollama',
+    rest: 'เมื่อเธอพักผ่อน', restCorner: 'ที่มุมห้องของเธอ', restTaskbar: 'นั่งอยู่ที่ทาสก์บาร์', watch: 'จับตาดู', watchNone: 'ไม่มีอะไร แค่อยู่เป็นเพื่อนก็พอ',
+    motion: 'ภาพเคลื่อนไหว', motionAuto: 'เหมือน Windows', motionFull: 'เต็มรูปแบบ', motionReduced: 'ลดลง',
+    display: 'การแสดงผล', displayAuto: 'ปกติ', displayGl: 'OpenGL (หากพื้นหลังของเธอเป็นสีดำ)', displaySoftware: 'ไม่ใช้การ์ดจอ (หากยังเป็นสีดำอยู่)',
+    show: 'พาเธอกลับมา', hide: 'เก็บเธอไปก่อน',
+    size: 'ขนาด', small: 'เล็ก', medium: 'กลาง', large: 'ใหญ่', sound: 'เสียง', mute: 'ปิดเสียง',
+    soundsDir: 'เปิดโฟลเดอร์เสียงกำหนดเอง', screen: 'หน้าจอ', wander: 'เดินเล่นเมื่อว่าง',
+    possess: 'ครอบครองหน้าต่างของฉัน', lang: 'ภาษา', auto: 'อัตโนมัติ (ตามระบบ)', startup: 'เริ่มทำงานพร้อม Windows',
+    hooksOn: 'Claude Code hooks: ติดตั้งแล้ว', hooksOff: 'ติดตั้ง Claude Code hooks',
+    hooksRemove: 'ลบ Claude Code hooks', forget: 'ลืมบทสนทนาระหว่างเรา', quit: 'ออก',
+    sync: (percent, stage) => `คุณและเธอ: ${percent}% · ${stage}`, stages: ['สัญญาณอ่อน', 'ติดต่อได้', 'ซิงก์กัน', 'เชื่อมโยง', 'หลอมรวม'],
+    reminders: 'การแจ้งเตือน', noReminders: 'ไม่มีการแจ้งเตือน (ลองคุยกับเธอในแชท)', cancelReminder: 'ยกเลิกการแจ้งเตือนนี้',
+    follow: 'ติดตามฉันไปทุกหน้าจอ', jealous: 'หึง AI ตัวอื่น',
+    lookNow: 'ดูหน้าจอของฉัน', lookAuto: 'แอบดูหน้าจอของฉันเป็นครั้งคราว',
+    pcReact: 'ตอบสนองต่อพีซีของฉัน',
+    cloudFree: 'ฟรี, ออนไลน์', cloudSignin: 'ลงชื่อเข้าใช้ Ollama (โมเดลคลาวด์ฟรี)…',
+  },
 };
 
 module.exports = { TRAY, LANGS: Object.keys(TRAY) };
