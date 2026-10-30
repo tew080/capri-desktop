@@ -13,16 +13,17 @@ const { powershell } = require('./apps');
 
 const WIN = process.platform === 'win32';
 // not things to open from a chat: uninstallers, help pages and the like
-const SKIP = /uninstall|désinstaller|desinstalar|deinstall|readme|documentation|release notes|support center|website|manual/i;
+const SKIP = /uninstall|désinstaller|desinstalar|deinstall|ถอนการติดตั้ง|readme|documentation|release notes|support center|website|manual|คู่มือ|เอกสาร/i;
 const STEAM_SKIP = /redistributable|dedicated server|steamworks/i;
 // words that don't tell apps apart ("Roblox Player" is "roblox", "AM Music" is "am")
-const FILLER = new Set(['player', 'launcher', 'app', 'the', 'for', 'windows', 'desktop', 'client', 'x64', 'x86', 'beta', 'music', 'musique', 'media', 'audio', 'video', 'videos']);
+const FILLER = new Set(['player', 'launcher', 'app', 'the', 'for', 'windows', 'desktop', 'client', 'x64', 'x86', 'beta', 'music', 'musique', 'media', 'audio', 'video', 'videos', 'โปรแกรม', 'แอป', 'ตัวเล่น']);
 const CACHE_MS = 10 * 60 * 1000; // installed apps hardly change
 
 let cache = null; // { at, items }
 
 const plain = (text) => String(text || '').toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '');
-const words = (text) => plain(text).split(/[^\p{L}\p{N}]+/u).filter((w) => w.length >= 2);
+// keep Thai/combining marks with their letters (vowels, tones); split only on real separators
+const words = (text) => (plain(text).match(/[\p{L}\p{M}\p{N}.]+/gu) || []).filter((w) => w.length >= 2);
 
 // Everything she can open: [{ name, kind: 'app' | 'steam' | 'epic', id }]
 async function launchables() {
@@ -112,7 +113,9 @@ function epicGames() {
 
 // The one of `items` named in `text` (your message, or the name in her tag): all the words of its
 // name in it, else at least half of them; the closest wins. null if nothing fits well enough.
+// Also handles continuous scripts (Thai, etc.) via full-string inclusion of the plain name.
 function match(items, text) {
+  const plainText = plain(text);
   const said = new Set(words(text));
   const joined = words(text).join('');
   let best = null;
@@ -121,6 +124,13 @@ function match(items, text) {
     const key = all.filter((w) => !FILLER.has(w));
     if (!key.length) key.push(...all); // a name made only of those ("Media Player"): all of it
     if (!key.length) continue;
+    const plainName = plain(item.name);
+    // full name appears inside the query (helps Thai / continuous scripts and exact phrases)
+    if (plainName.length >= 3 && plainText.includes(plainName)) {
+      const rank = 12 + plainName.length / 10;
+      if (!best || rank > best.rank) best = { item, rank };
+      continue;
+    }
     const hits = key.filter((w) => said.has(w) || (w.length >= 5 && joined.includes(w)));
     // a word of 3 letters or more, or all of a short name ("am" for AM Music)
     if (!(hits.some((w) => w.length >= 3) || hits.length === key.length) || hits.length / key.length < 0.5) continue;
@@ -154,16 +164,16 @@ function desktopItems() {
 const RUNS = /\.(exe|bat|cmd|ps1|vbs|vbe|js|jse|wsf|wsh|msi|msp|reg|scr|com|jar|hta|cpl|pif)$/i;
 const risky = (item) => item?.kind === 'file' && RUNS.test(item.id);
 
-// Folders asked for by what they are ("ouvre mes téléchargements", "open the file explorer").
+// Folders asked for by what they are ("ouvre mes téléchargements", "open the file explorer", "เปิดดาวน์โหลด").
 const FOLDERS = [
-  ['explorer', /explorateur|file explorer|\bexplorer\b|ce pc|this pc|explorador|проводник/i],
-  ['recycle', /corbeille|recycle bin|\btrash\b|papelera|lixeira|корзин/i],
-  ['downloads', /t[ée]l[ée]chargements?|downloads?|descargas|transfer[êe]ncias|загрузк/i],
-  ['desktop', /\bbureau\b|\bdesktop\b|escritorio|[áa]rea de trabalho|рабоч\S* стол/i],
-  ['documents', /\bdocuments?\b|documentos|документ/i],
-  ['pictures', /\bimages\b|\bphotos\b|\bpictures\b|im[áa]genes|\bfotos\b|imagens|изображени|фото/i],
-  ['music', /dossier (de )?musique|music folder|carpeta de m[úu]sica|pasta de m[úu]sica|папк\S* (с )?музык/i],
-  ['videos', /\bvid[ée]os\b|v[íi]deos|видео/i],
+  ['explorer', /explorateur|file explorer|\bexplorer\b|ce pc|this pc|explorador|проводник|ไฟล์เอ็กซ์พลอเรอร์|เอ็กซ์พลอเรอร์|สำรวจไฟล์|คอมพิวเตอร์นี้/i],
+  ['recycle', /corbeille|recycle bin|\btrash\b|papelera|lixeira|корзин|ถังขยะ|รีไซเคิล/i],
+  ['downloads', /t[ée]l[ée]chargements?|downloads?|descargas|transfer[êe]ncias|загрузк|ดาวน์โหลด|ดาวน์โหลดส์/i],
+  ['desktop', /\bbureau\b|\bdesktop\b|escritorio|[áa]rea de trabalho|рабоч\S* стол|เดสก์ท็อป|หน้าจอ|พื้นโต๊ะ/i],
+  ['documents', /\bdocuments?\b|documentos|документ|เอกสาร|เอกสารของฉัน/i],
+  ['pictures', /\bimages\b|\bphotos\b|\bpictures\b|im[áa]genes|\bfotos\b|imagens|изображени|фото|รูปภาพ|ภาพถ่าย|รูป/i],
+  ['music', /dossier (de )?musique|music folder|carpeta de m[úu]sica|pasta de m[úu]sica|папк\S* (с )?музык|เพลง|โฟลเดอร์เพลง|ดนตรี/i],
+  ['videos', /\bvid[ée]os\b|v[íi]deos|видео|วิดีโอ|วีดีโอ|คลิป/i],
 ];
 
 function knownFolder(text) {

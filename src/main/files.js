@@ -12,8 +12,11 @@ const { powershell } = require('./apps');
 const LIMIT = 8;
 const found = new Set(); // what a search showed you: the only paths she opens from here
 
-const words = (query) => String(query || '').toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '')
-  .split(/[^\p{L}\p{N}.]+/u).filter((w) => w.length >= 2).slice(0, 5);
+// keep Thai/combining marks with their letters (vowels, tones); split only on real separators
+const words = (query) => {
+  const plain = String(query || '').toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '');
+  return (plain.match(/[\p{L}\p{M}\p{N}.]+/gu) || []).filter((w) => w.length >= 2).slice(0, 5);
+};
 
 // never in the results: code dependencies, app data, git internals
 const JUNK = ['node_modules', '\\AppData\\', '\\.git\\', '\\site-packages\\', '\\$Recycle.Bin\\'];
@@ -24,7 +27,7 @@ const CODE = ['js', 'mjs', 'cjs', 'ts', 'tsx', 'jsx', 'json', 'map', 'lock', 'ym
 // Windows Search: names first (every word in the name, of one of `exts` if any), then what's in
 // documents (not code). null if the index can't be asked.
 async function indexed(terms, exts) {
-  const safe = terms.map((t) => t.replace(/[^\p{L}\p{N}.]/gu, '')).filter(Boolean);
+  const safe = terms.map((t) => t.replace(/[^\p{L}\p{M}\p{N}.]/gu, '')).filter(Boolean);
   const types = exts.map((e) => e.replace(/[^a-z0-9]/gi, '')).filter(Boolean);
   if (!safe.length && !types.length) return [];
   const scope = `file:${app.getPath('home')}`; // backslashes: with slashes the index finds nothing
