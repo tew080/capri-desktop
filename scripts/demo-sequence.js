@@ -58,7 +58,7 @@ const base = (name, extra = {}) => ({ hook_event_name: name, session_id: SESSION
 const tool = (name, input) => base('PreToolUse', { tool_name: name, tool_input: input });
 const done = (name, input, ms) => base('PostToolUse', { tool_name: name, tool_input: input, duration_ms: ms });
 
-// The steps, in `lang` (fr, en, es, pt, ru; English for anything else).
+// The steps, in `lang` (fr, en, es, pt, ru, th; English for anything else).
 module.exports = function demoSteps(lang = 'en') {
   const t = TEXT[lang] || TEXT.en;
   return [

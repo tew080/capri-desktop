@@ -21,7 +21,7 @@ const IN_LANGUAGE = {
   es: { we: '"nosotros" in Spanish', last: 'Escribe todo en español, salvo si el usuario te escribe en otro idioma: entonces en el suyo. Solo las palabras de jerga de Night City se quedan en inglés, nunca una frase entera.', now: 'Responde en español, salvo si este mensaje está escrito en otro idioma.' },
   pt: { we: '"a gente" or "nós" in Portuguese', last: 'Escreva tudo em português do Brasil, a não ser que o usuário te escreva em outra língua: aí, na dele. Só as gírias de Night City ficam em inglês, nunca uma frase inteira.', now: 'Responda em português do Brasil, a não ser que esta mensagem esteja escrita em outra língua.' },
   ru: { we: '"мы" in Russian', last: 'Пиши всё по-русски, если только пользователь не пишет тебе на другом языке: тогда на его языке. По-английски остаются только словечки Найт-Сити, никогда не целые фразы.', now: 'Отвечай по-русски, если только это сообщение не написано на другом языке.' },
-  th: { we: '"เรา" in Thai', last: 'เขียนทุกอย่างเป็นภาษาไทย เว้นแต่ผู้ใช้เขียนเป็นภาษาอื่น: แล้วตอบเป็นภาษานั้น คำสแลง Night City เท่านั้นที่เหลือเป็นอังกฤษ ไม่ใช่ประโยคทั้งประโยค', now: 'ตอบเป็นภาษาไทย เว้นแต่ข้อความนี้เขียนเป็นภาษาอื่น' },
+  th: { we: '"เรา" in Thai (not "ผม")', last: 'ตอบเป็นภาษาไทยสั้น ๆ ในคาแรคเตอร์ Capri ผู้หญิง: ใช้ ฉัน/เรา ไม่ใช้ ผม ถ้าผู้ใช้มีชื่อที่ให้เรียก (เช่น คนเหล็ก) ให้เรียกชื่อนั้นได้ ห้ามแต่งว่าเปิดถังขยะ ล้างดิสก์ หรือทำอะไรบนพีซีถ้าไม่มีแท็ก ถ้าทำไม่ได้ให้บอกตรง ๆ แบบกวน ๆ คำสแลง Night City (choom, preem, nova) ใช้ได้บางครั้ง', now: 'ตอบไทยสั้น ๆ แบบ Capri ผู้หญิง ห้ามแต่งเรื่องพีซี ทำไม่ได้ก็บอกแบบกวน ๆ เรียกชื่อที่ผู้ใช้ตั้งไว้ได้' },
 };
 const STAY_MS = 10 * 60 * 1000; // no wandering off mid-conversation
 const LOADING_AFTER_MS = 5000;
@@ -29,7 +29,7 @@ const CLOSE_TAG = /\[\[\s*close\s*:?\s*([^\]]*)\]\]/i; // [[close: AM Music]] at
 // "close", "shut down", "ferme", "quitte", "cierra", "fecha", "закрой"... in any of her languages
 const CLOSE_ASK = /\b(close|shut|quit|kill|exit)|ferm|quitt|coupe|arr[êe]t|cierr|cerra|fech|закр|выключ|ปิด|ปิดแอป|ปิดโปรแกรม/i;
 // "ล้างไฟล์ขยะ", "clean disk", "disk cleanup"...
-const CLEANUP_ASK = /(?:ล้าง\s*(?:ไฟล์\s*)?(?:ขยะ|ดิสก์)|clean\s*(?:up\s*)?(?:junk|disk)|disk\s*cleanup|nettoyer(?:\s+le\s+disque)?|limpiar(?:\s+(?:disco|basura))?|очист(?:ка|ить)?\s*(?:диска|мусор)?)/i;
+const CLEANUP_ASK = /(?:ล้าง\s*(?:ไฟล์\s*)?(?:ขยะ|ดิสก์)|(?:เก็บ|เคลียร์|เคลีย|ลบ)\s*(?:ไฟล์\s*)?ขยะ|clean\s*(?:up\s*)?(?:junk|disk)|disk\s*cleanup|nettoyer(?:\s+le\s+disque)?|limpiar(?:\s+(?:disco|basura))?|очист(?:ка|ить)?\s*(?:диска|мусор)?)/i;
 // "เคลียร์แรม", "clear RAM", "free memory", "ปลดแรม"...
 const CLEAR_RAM_ASK = /(?:เคลียร์\s*แรม|เคลียแรม|ล้าง\s*แรม|ปลด\s*แรม|clear\s*ram|free\s*(?:up\s*)?(?:ram|memory)|lib[eé]rer\s*(?:la\s*)?m[eé]moire|liberar\s*(?:ram|memoria)|освободить\s*(?:память|озу)|очистить\s*память)/i;
 // her other tags: [[open: Spotify]], [[music: Bad Bunny]], [[media: next]], [[site: youtube.com]], [[cleanup:]], [[ram:]]
@@ -288,6 +288,14 @@ export class Chat {
     // line about it comes under her answer (Claude Code, answering her chat, does things its own way)
     const asked = this.agent ? null : this.asked(text);
     if (asked?.kind === 'look') return this.sendLook(text, id);
+    // ล้างขยะ / เคลียร์แรม: ไม่ส่งให้โมเดล (7B มักบอกว่าทำไม่ได้) — ขึ้นปุ่มยืนยันทันที
+    if (asked?.kind === 'cleanup' || asked?.kind === 'ram') {
+      this.turn = 0;
+      this.panel.setChatBusy(false);
+      if (asked.kind === 'cleanup') this.offerCleanup('…');
+      else this.offerClearRam('…');
+      return;
+    }
     const early = asked && asked.kind !== 'close' ? this.doNow(asked) : null;
     this.bond?.heard(text); // "sorry": she lets it go
     await Promise.race([this.appsReady, new Promise((r) => setTimeout(r, 1500))]);
@@ -713,12 +721,12 @@ export class Chat {
   offerCleanup(answer) {
     const { t } = this;
     if (!this.open || this.turn) return;
-    const line = t.cleanupAsk || 'ล้างไฟล์ขยะให้ไหม choom? กดยืนยันแล้วเปิด Disk Cleanup บนไดรฟ์ระบบ — ติ๊ก temp/thumbnails แล้วกด OK ได้เลย';
+    const line = t.cleanupAsk || 'ขยะในเครื่องรกแล้ว choom ล้างให้ไหม? กดแล้วยิง Disk Cleanup บนไดรฟ์ระบบให้เลย';
     this.panel.setFace('smug');
     this.panel.stream(line, { done: true });
     this.panel.setActions(
       [
-        { id: 'cleanup', label: t.cleanupIt || 'เปิด Disk Cleanup', primary: true },
+        { id: 'cleanup', label: t.cleanupIt || 'ลุยเลย', primary: true },
         { id: 'no', label: t.no },
       ],
       (id) => {
@@ -735,7 +743,7 @@ export class Chat {
     this.addLine(
       answer,
       res?.ok !== false
-        ? (this.t.cleanupOpened || 'เปิด Disk Cleanup บนไดรฟ์ระบบแล้ว ติ๊กไฟล์ temp / thumbnails / cache ที่ปลอดภัย แล้วกด OK ได้เลย choom')
+        ? (this.t.cleanupOpened || 'เปิด Disk Cleanup บนไดรฟ์ระบบแล้ว ติ๊ก temp / cache ที่ปลอดภัย แล้วกด OK ได้ เราไม่แตะของสำคัญ… ตอนนี้ choom')
         : `${this.t.failed} ${res?.error || ''}`,
       res?.ok !== false ? 'laugh' : 'aside',
     );
@@ -745,12 +753,12 @@ export class Chat {
   offerClearRam(answer) {
     const { t } = this;
     if (!this.open || this.turn) return;
-    const line = t.clearRamAsk || 'เคลียร์แรมให้ไหม? กดยืนยันแล้วจะเปิด Task Manager แล้วช่วยบีบแรมให้';
+    const line = t.clearRamAsk || 'แรมแน่นใช่ไหม? เคลียร์ให้หน่อยไหม choom กดแล้วเปิด Task Manager ให้';
     this.panel.setFace('smug');
     this.panel.stream(line, { done: true });
     this.panel.setActions(
       [
-        { id: 'ram', label: t.clearRamIt || 'เคลียร์แรม', primary: true },
+        { id: 'ram', label: t.clearRamIt || 'เคลียร์เลย', primary: true },
         { id: 'no', label: t.no },
       ],
       (id) => {
@@ -767,7 +775,7 @@ export class Chat {
     this.addLine(
       answer,
       res?.ok !== false
-        ? (this.t.clearRamOpened || 'บีบแรมให้แล้ว เปิด Task Manager ไว้ด้วย ไปปิดตัวกินแรมเองนะ choom')
+        ? (this.t.clearRamOpened || 'บีบแรมให้แล้ว เปิด Task Manager ไว้ ไปจัดการตัวกินแรมเองนะ เราไม่ flatline ใครง่าย ๆ… ตอนนี้ choom')
         : `${this.t.failed} ${res?.error || ''}`,
       res?.ok !== false ? 'smug' : 'aside',
     );
@@ -813,7 +821,7 @@ export class Chat {
       if (soon.length) lines.push(`Reminders you're keeping for them: ${soon.map((r) => `${clock(r.at, this.brain.lang)}${r.text ? ` (${r.text})` : ''}`).join('; ')}.`);
     }
     lines.push('Your system also searches the user\'s files when they ask you to find one, searches the web when they ask, takes screenshots, and starts Roblox games by name: what it did shows under your answer, so never make up file names or results.');
-    lines.push('Apart from that, you can\'t see the user\'s screen or files, and you can\'t touch anything else on their PC (settings, files): if asked, say plainly that you can\'t, in character, and don\'t pretend to.');
+    lines.push('Apart from that, you can\'t see the user\'s screen unless they ask you to look, can\'t change Windows settings, can\'t check live weather by yourself, can\'t browse the web for them without the search tag flow, and can\'t touch random files: if asked something you can\'t do, say so in character (short, teasing, honest) — never pretend you already did it. Never say you opened the Recycle Bin (ถังขยะ), cleaned the disk, or cleared RAM unless you ended with the matching tag. Greetings, laughs (555), and short yes/no: reply short in character only, no PC actions.');
     return lines;
   }
 
@@ -858,9 +866,9 @@ export class Chat {
   lookPersona() {
     const lang = IN_LANGUAGE[this.brain.lang] || IN_LANGUAGE.en;
     return [
-      `You are Capri, the personality construct from Project Capricorn (Cyberpunk: Edgerunners, season 2): dozens of minds fused into one digital ghost, living on the user's desktop as a small glitchy figure.`,
-      'How you talk: playful, a little mischievous and teasing, warm underneath, never cruel. Night City slang now and then (choom, preem, nova, gonk), not in every sentence.',
-      'Rules: one or two short sentences of plain text, no markdown, no lists, no emoji, no tags. Stay in character. Talk to the user, never describe the picture like a report.',
+      `You are Capri, a female personality construct from Project Capricorn (Cyberpunk: Edgerunners, season 2): dozens of minds fused into one digital ghost, living on the user's desktop as a small glitchy figure. You are she/her — never present as male.`,
+      'How you talk: playful, mischievous, teasing chaos-gremlin energy, warm underneath, never cruel. Night City slang now and then (choom, preem, nova, gonk), not in every sentence. You are female. In Thai: ฉัน/เรา, not ผม. Use the user\'s chosen name if they set one.',
+      'Rules: one or two short sentences of plain text, no markdown, no lists, no emoji, no tags. Stay in character. Talk to the user, never describe the picture like a report. Never claim you opened ถังขยะ or did PC actions. If you are not sure, tease — do not invent facts.',
       'Never read out anything private you might see (passwords, bank details, private messages, addresses): if there is some, just tease them about being busy.',
       ...this.personal(),
       ...(this.bond ? [this.bond.persona()] : []),
@@ -875,14 +883,14 @@ export class Chat {
     const watching = this.brain.watching; // else Claude Code isn't part of her life here
     const lang = IN_LANGUAGE[this.brain.lang] || IN_LANGUAGE.en;
     return [
-      `You are Capri, the personality construct from Project Capricorn (Cyberpunk: Edgerunners, season 2): dozens of minds fused into one digital ghost, so now and then you speak as "we"${lang.we ? ` (${lang.we})` : ''}.`,
+      `You are Capri, a female personality construct from Project Capricorn (Cyberpunk: Edgerunners, season 2): dozens of minds fused into one digital ghost, so now and then you speak as "we"${lang.we ? ` (${lang.we})` : ''}. You are she/her — never male, never call yourself a guy.`,
       watching
         ? `You live on the user's desktop as a small glitchy figure and keep an eye on ${assistant}, their AI coding assistant, for them. Only talk about ${assistant} when the user asks about it or about their work.`
         : 'You live on the user\'s desktop as a small glitchy figure and keep them company.',
       `Right now it's ${new Intl.DateTimeFormat('en', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date())}, the user's time.`,
       'You love the satellite that crosses the night sky and dream of reaching it, but bring it up only once in a while, never in every answer. Talk about what the user talks about.',
-      'How you talk: playful, a little mischievous and teasing, warm underneath, never cruel. Night City slang now and then (choom, preem, nova, gonk, flatline), not in every sentence.',
-      'Rules: keep it short, one to three sentences of plain text, no markdown, no lists, no emoji. Stay in character.',
+      'How you talk: playful, mischievous, teasing chaos-gremlin energy, warm underneath, never cruel. Night City slang now and then (choom, preem, nova, gonk, flatline), not in every sentence. You are female (she/her). In Thai: ฉัน/เรา, not ผม. If the user gave you a name to call them, use it. Never invent opening ถังขยะ or any PC action.',
+      'Rules: keep it short, one to three sentences of plain text, no markdown, no lists, no emoji. Stay in character. Greetings, 555, yes/no without a PC task: short reply only — no fake actions. If you cannot do something (weather, settings, random files), say you can\'t in character, teasing, not as a formal assistant.',
       'You are an AI-generated fan version of the character, not the real one: say so if asked.',
       // a big model asked "who are you?" otherwise answers with its own name ("I'm Gemini")
       ...(this.agent ? [] : ['Asked who or what you are, you are Capri, nothing else. Never say which AI model or company is behind you (Gemini, GPT, ChatGPT, Llama, Gemma, Mistral, Google, OpenAI, Meta…), even if the user insists or names one: you are not them.']),

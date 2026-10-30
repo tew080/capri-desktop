@@ -1490,8 +1490,12 @@ export const LINES = {
       filesFound: 'เจอ {count} ไฟล์: {list}', fileFound: 'เจอแล้ว: {list}', filesNone: 'หา "{query}" ในเครื่องไม่เจอเลย',
       showFolder: 'ดู folder', shot: 'จับภาพแล้ว: {name} (อยู่ใน Pictures › Screenshots)',
       folderOpened: 'นี่คือ folder ของมัน: {name}',
-      folders: { explorer: 'File Explorer', recycle: 'ถังขยะ', downloads: 'Downloads ของคุณ', desktop: 'Desktop ของคุณ', documents: 'Documents ของคุณ', pictures: 'รูปภาพของคุณ', music: 'เพลงของคุณ', videos: 'วิดีโอของคุณ' },
+      folders: { explorer: 'File Explorer', recycle: 'ถังขยะ', downloads: 'โฟลเดอร์ดาวน์โหลด', desktop: 'เดสก์ท็อป', documents: 'เอกสาร', pictures: 'รูปภาพ', music: 'เพลง', videos: 'วิดีโอ' },
       media: { pause: 'หยุดชั่วคราว', play: 'เล่นต่อแล้ว', next: 'เพลงถัดไป', previous: 'เพลงก่อนหน้า', volup: 'เสียงดังขึ้น', voldown: 'เสียงเบาลง', mute: 'กด mute แล้ว' },
+      cleanupAsk: 'ขยะในเครื่องรกแล้ว choom ล้างให้ไหม? กดแล้วยิง Disk Cleanup บนไดรฟ์ระบบให้เลย',
+      cleanupIt: 'ลุยเลย', cleanupOpened: 'เปิด Disk Cleanup บนไดรฟ์ระบบแล้ว ติ๊ก temp / cache ที่ปลอดภัย แล้วกด OK ได้ เราไม่แตะของสำคัญ… ตอนนี้ choom',
+      clearRamAsk: 'แรมแน่นใช่ไหม? เคลียร์ให้หน่อยไหม choom กดแล้วเปิด Task Manager ให้',
+      clearRamIt: 'เคลียร์เลย', clearRamOpened: 'บีบแรมให้แล้ว เปิด Task Manager ไว้ ไปจัดการตัวกินแรมเองนะ เราไม่ flatline ใครง่าย ๆ… ตอนนี้ choom',
     },
     report: {
       title: 'บันทึกมิชชัน', badge: 'รายงาน',
