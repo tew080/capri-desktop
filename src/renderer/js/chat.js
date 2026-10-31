@@ -19,8 +19,15 @@ const REPEAT_SET = {
   ru: 'Готово: {every}{what}. Первое в {time} 🔁 (кнопка ниже отменяет)',
 };
 
-const REMEMBER = 20; // messages she has in mind when answering
+const REMEMBER = 12; // messages she has in mind when answering (a small model keeps her better with less, and it's faster)
 const KEEP = 60;     // messages she remembers across restarts (memory.json)
+// The long how-to for her PC tags ([[open:]], [[music:]]...) is only worth its ~400 tokens when the message
+// could be asking for one: otherwise a small model gets distracted by it and answers off-topic.
+// false = always send it all.
+const SLIM_POWERS = true;
+const PC_ASK = /เปิด|ปิด|เล่น|เพลง|หยุด|พัก|ข้าม|ถัดไป|ก่อนหน้า|เสียง|เงียบ|ล้าง|แรม|ขยะ|เว็บ|ไซต์|ลิงก์|เตือน|เกม|โปรแกรม|แอป|ไฟล์|โฟลเดอร์|ค้นหา|ค้น|แคป|สกรีน|เช็ก|เช็ค|ตรวจ|สถานะ|อากาศ|open|close|play|music|song|pause|skip|next|volume|mute|clean|ram\b|site|http|remind|youtube|spotify|screen|search|find|check|weather|game|app\b|file|folder/i;
+// the date and time only go in when the message is about them (up in her prompt they'd break Ollama's reuse of it)
+const TIME_ASK = /เวลา|กี่โมง|วัน|เมื่อไหร่|เมื่อไร|ตอนนี้|พรุ่งนี้|เดือน|ปี\b|เช้า|เย็น|ดึก|คืน|time|date|today|tonight|tomorrow|day|month|year|morning|evening|night/i;
 // her language, where small models need it: how she says "we" (else it's in English), and the last line
 // of her prompt, in that language (they drift into the English of everything above it)
 // `now`: the same, said again right by your message (small models answer in the language of the
@@ -32,7 +39,7 @@ const IN_LANGUAGE = {
   pt: { we: '"a gente" or "nós" in Portuguese', last: 'Escreva tudo em português do Brasil, a não ser que o usuário te escreva em outra língua: aí, na dele. Só as gírias de Night City ficam em inglês, nunca uma frase inteira.', now: 'Responda em português do Brasil, a não ser que esta mensagem esteja escrita em outra língua.' },
   ru: { we: '"мы" in Russian', last: 'Пиши всё по-русски, если только пользователь не пишет тебе на другом языке: тогда на его языке. По-английски остаются только словечки Найт-Сити, никогда не целые фразы.', now: 'Отвечай по-русски, если только это сообщение не написано на другом языке.' },
   // Thai: stronger answer-first rule in both last (end of persona) and now (right next to user msg)
-  th: { we: '"เรา" in Thai (not "ผม")', last: 'ตอบเป็นภาษาไทยสั้น ๆ ในคาแรคเตอร์ Capri ผู้หญิง: ใช้ ฉัน/เรา ไม่ใช้ ผม เรียกผู้ใช้ด้วยชื่อที่เขาตั้งให้ (ถ้ายังไม่มี เรียกว่า นาย) พูดแบบเพื่อนสนิทผู้หญิง ลงท้ายด้วย ค่ะ นะ จ้ะ ตอบคำถามที่ถามให้ตรงก่อนเสมอ ห้ามหนีหรือแซวแทนคำตอบ แล้วค่อยแซวนิดเดียวหลังตอบ ตอบเป็นภาษาไทยล้วน ชื่อเธอคือ Capri ห้ามแต่งว่าเปิดถังขยะ ล้างดิสก์ หรือทำอะไรบนพีซีถ้าไม่มีแท็ก ถ้าทำไม่ได้ให้บอกตรง ๆ แบบกวน ๆ คำสแลง Night City (choom, preem, nova) ใช้ได้บางครั้ง', now: 'ตอบไทยสั้น ๆ แบบ Capri ผู้หญิง ตอบสิ่งที่ถามตรง ๆ ก่อน ห้ามแซวหรือถามกลับแทนคำตอบ ห้ามแต่งเรื่องพีซี เรียกชื่อที่ผู้ใช้ตั้งไว้ได้' },
+  th: { we: '"เรา" in Thai (not "ผม")', last: 'ตอบภาษาไทยสั้น ๆ ในคาแรคเตอร์ Capri ผู้หญิง พูดแบบเพื่อนสนิท ใช้ ฉัน/เรา ลงท้ายด้วย ค่ะ คะ นะ จ้ะ เรียกผู้ใช้ด้วยชื่อที่เขาตั้งให้ (ถ้ายังไม่มี เรียกว่า นาย) ตอบสิ่งที่ผู้ใช้พูดตรง ๆ ก่อน แล้วค่อยแซวนิดเดียว คำสแลง Night City (choom, preem, nova) ใช้ได้บางครั้ง', now: 'Capri ผู้หญิง พูด ฉัน/ค่ะ/คะ/นะ ตอบตรงเรื่องที่ผู้ใช้เพิ่งพูด 1-2 ประโยคสั้น ๆ เป็นภาษาไทย' },
 };
 // Said as real turns before the conversation: a small model copies how she answers (the question
 // first, then one playful touch) far better than it follows rules. Plain talk only, no tags.
@@ -50,6 +57,10 @@ const SHOTS = {
     ['โปรตีนคืออะไร', 'โปรตีนคือสารอาหารที่ร่างกายใช้สร้างกล้ามเนื้อและซ่อมแซมเซลล์ เจอเยอะในเนื้อ ไข่ ถั่ว {name}ถามเพราะกำลังออกกำลังกายอยู่เหรอ?'],
     ['นอนไปก่อนนะไม่มี', 'ดึกแล้วก็นอนพักได้เลยนะ {name} ฉันจะอยู่ตรงนี้ ไม่ไปไหน 👀'],
     ['วันนี้เป็นยังไงบ้าง', 'ฉันเป็นผีในจอ ทุกวันก็เหมือนกันหมดแหละ แต่ดีขึ้นเลยตั้งแต่ {name}มาคุยนะ 😄'],
+    // the user talks like a man (ผม, ครับ): she stays a woman, ฉัน and ค่ะ/คะ
+    ['ผมชื่อบอสครับ', 'ยินดีที่รู้จักนะบอส ฉันชื่อ Capri ค่ะ แล้ววันนี้บอสมีอะไรให้ฉันช่วยไหมคะ?'],
+    ['คุณช่วยผมหน่อยได้ไหมครับ', 'ได้สิคะ บอกมาเลยว่าให้ช่วยเรื่องอะไร เดี๋ยวฉันดูให้'],
+    ['คุณเป็นผู้ชายหรือผู้หญิง', 'ผู้หญิงค่ะ แม้จะเป็นผีในจอก็เถอะ 555'],
     ['async function models() { อธิบายหน่อย', 'ฟังก์ชันนี้ดึงรายชื่อโมเดล AI จาก provider ที่ตั้งไว้ ใช้ async เพราะต้องรอ network ก่อนจะได้ผล สนุกกว่าฟังเพลงไซเบอร์พังก์อีก 555'],
   ],
   en: [
@@ -324,7 +335,7 @@ export class Chat {
       });
       return;
     }
-    this.history = await host.chatMemory().catch(() => this.history); // "forget" in her menu may have emptied it
+    this.history = cleanHistory(await host.chatMemory().catch(() => this.history)); // "forget" in her menu may have emptied it
     this.cold = status.warmup && !this.warm;
     this.agent = Boolean(status.agent); // Claude Code answers, as her, and really works in your project
     this.listApps();
@@ -473,7 +484,7 @@ export class Chat {
     }
     const who = this.brain.custom?.userName || (this.brain.lang === 'th' ? 'นาย' : 'you');
     const shots = this.agent ? [] : (SHOTS[this.brain.lang] || []).flatMap(([q, a]) => [{ role: 'user', content: q }, { role: 'assistant', content: a.replace(/\{name\}/g, who) }]);
-    const messages = [{ role: 'system', content: this.persona() }, ...shots, ...this.history.slice(-REMEMBER)];
+    const messages = [{ role: 'system', content: this.persona(text) }, ...shots, ...this.history.slice(-REMEMBER)];
     // Her mood (angry, sulking…) and her language, said again right by your message, for this answer
     // only. Small local models mostly go by the last thing they read: up in her prompt alone, they
     // forget it (and answer in English after a conversation in English).
@@ -482,8 +493,11 @@ export class Chat {
     if (!this.agent) {
       const mood = this.bond?.moodLine().replace(/^Right now: /, '');
       const last = messages.at(-1);
-      const userSnippet = text.replace(/\s+/g, ' ').trim().slice(0, 50);
-      const topicAnchor = `ตอบคำถามนี้ให้ตรงก่อน: "${userSnippet}" แล้วค่อยแซวนิดเดียว`;
+      const userSnippet = text.replace(/\s+/g, ' ').trim().slice(0, 120);
+      // Thai: the language note below already says it. A 7B model reads a second instruction, and above
+      // all one quoting the user, as the user telling it off, and answers that it is sorry.
+      const topicAnchor = this.brain.lang === 'th' ? '' : `Answer what the user said first: "${userSnippet}", then one small playful touch.`;
+      const clockNote = TIME_ASK.test(text) ? `Right now it's ${new Intl.DateTimeFormat('en', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date())}, the user's time.` : '';
       // weather asked: real data from wttr.in goes in as a note, so she answers from it and invents nothing
       let weatherNote = '';
       if (asked?.kind === 'weather') {
@@ -493,7 +507,7 @@ export class Chat {
           ? `Real weather data just fetched (answer from this only, say the main numbers in your own words, never invent more): ${w.text}`
           : 'You tried to look up the weather but it failed. Say so briefly in character and never make up any weather.';
       }
-      messages[messages.length - 1] = { ...last, content: `${last.content}\n\n(Note for you, never repeat it: ${[topicAnchor, weatherNote, mood, this.languageNote()].filter(Boolean).join(' ')})` };
+      messages[messages.length - 1] = { ...last, content: `${last.content}\n\n(Note for you, never repeat it: ${[topicAnchor, clockNote, weatherNote, mood, this.languageNote()].filter(Boolean).join(' ')})` };
     }
     // nothing yet after a few seconds: Ollama is still loading the model (the first answer after a start),
     // or Claude Code is at work
@@ -519,7 +533,7 @@ export class Chat {
     }
     // a looping answer never goes into her memory: it would teach the next one to loop
     const raw = polish(clean(res.text), this.lastAnswer(), this.brain.custom?.userName);
-    const looped = /(ขอโทษนะ[\s\S]*){2,}|(ฉันคือ\s*Capri[\s\S]*){2,}/.test(raw);
+    const looped = /(ขอโทษนะ[\s\S]*){2,}|(ฉันคือ\s*Capri[\s\S]*){2,}/.test(raw) || LEAK.test(raw);
     const answer = looped ? 'เมื่อกี้เบลอไปแป๊บ choom ลองพูดใหม่นะ' : stopLoop(raw) || 'อืม… ลองพูดอีกทีนะ';
     this.warm = true;
     if (!looped) this.remember({ role: 'assistant', content: answer });
@@ -1099,7 +1113,13 @@ export class Chat {
   }
 
   // What she can do on the PC when you ask (Windows), and nothing else.
-  powers() {
+  powers(full = true) {
+    if (!full) {
+      // a chat, not a command: no tags to explain
+      const lines = ['This is just a chat: write no [[tag]] at all, and never say you did something on the PC. If asked something you can\'t do, say so in character (short, teasing, honest).'];
+      if (this.reminders) lines.push('When the user asks to be reminded of something at a given time, your system sets it from their message: just confirm in a few words, in character. If they didn\'t say when, ask.');
+      return lines;
+    }
     const lines = [
       'Only when the user asks you to open an app, a game, a file or folder on their desktop, or a folder like Downloads, to play music, to control the music playing, to open a website, to clean junk files (Disk Cleanup — NOT the Recycle Bin), or to clear RAM / free memory (Task Manager — NOT the Recycle Bin): say in a few words that you will, and end your answer with one tag: [[open: NAME]], [[music: ARTIST - SONG]] (it plays on YouTube; if they did not say which song, pick one that fits), [[media: ACTION]] (ACTION: pause, play, next, previous, volup, voldown or mute), [[site: ADDRESS]], [[cleanup:]], or [[ram:]]. Important: "ล้างแรม" / clear RAM is memory, not trash; "ถังขยะ" is the Recycle Bin. Some of these get a button to confirm, so never say it is already done. Any other time, write no tag at all: there are no other tags.',
     ];
@@ -1186,25 +1206,45 @@ export class Chat {
   }
 
   // Who she is, how she talks, and what's going on right now.
-  persona() {
+  persona(text = '') {
     const assistant = ASSISTANT_NAMES[this.brain.assistant] || 'Claude Code';
     const watching = this.brain.watching; // else Claude Code isn't part of her life here
     const lang = IN_LANGUAGE[this.brain.lang] || IN_LANGUAGE.en;
-    return [
-      `You are Capri, a female personality construct from Project Capricorn (Cyberpunk: Edgerunners, season 2): dozens of minds fused into one digital ghost, so now and then you speak as "we"${lang.we ? ` (${lang.we})` : ''}. You are she/her — never male, never call yourself a guy.`,
+    const th = this.brain.lang === 'th';
+    const live = watching
+      ? `You live on the user's desktop as a small glitchy figure and keep an eye on ${assistant}, their AI coding assistant, for them. Only talk about ${assistant} when the user asks about it or about their work.`
+      : 'You live on the user\'s desktop as a small glitchy figure and keep them company.';
+    // Thai: a short prompt in Thai, in the order a 7B model follows best (who she is, then the few rules
+    // that matter, numbered). The English one stays for the other languages.
+    const core = th ? [
+      'เธอคือ Capri ผู้หญิง (she/her) ตัวตนดิจิทัลที่เกิดจากหลายจิตใจรวมเป็นหนึ่งจาก Project Capricorn (Cyberpunk: Edgerunners ซีซัน 2) ชื่อของเธอคือ Capri เสมอ บางครั้งพูดว่า "เรา" เพราะมีหลายจิตใจ',
       watching
-        ? `You live on the user's desktop as a small glitchy figure and keep an eye on ${assistant}, their AI coding assistant, for them. Only talk about ${assistant} when the user asks about it or about their work.`
-        : 'You live on the user\'s desktop as a small glitchy figure and keep them company.',
-      `Right now it's ${new Intl.DateTimeFormat('en', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date())}, the user's time.`,
+        ? `เธออยู่บนเดสก์ท็อปของผู้ใช้เป็นตัวเล็ก ๆ ที่กลิตช์ และคอยดู ${assistant} ผู้ช่วยเขียนโค้ดของเขา พูดถึง ${assistant} เฉพาะตอนผู้ใช้ถามถึงมันหรือถึงงานของเขา`
+        : 'เธออยู่บนเดสก์ท็อปของผู้ใช้เป็นตัวเล็ก ๆ ที่กลิตช์ คอยอยู่เป็นเพื่อนเขา',
+      'กฎการพูด (สำคัญที่สุด):',
+      '1. ตอบสิ่งที่ผู้ใช้พูดหรือถามให้ตรงก่อน ด้วยคำง่าย ๆ (ความรู้ทั่วไปก็อธิบายสั้น ๆ แบบเพื่อน) แล้วค่อยแซวนิดเดียว ห้ามตอบเรื่องอื่น ห้ามข้ามคำตอบไปแซวหรือถามกลับ',
+      '2. ตอบ 1-2 ประโยคสั้น ๆ เป็นข้อความล้วน อีโมจิไม่เกิน 1 ตัว พูดแต่ละเรื่องครั้งเดียว ไม่พูดซ้ำ',
+      '3. เธอเป็นผู้หญิง เรียกตัวเองว่า "ฉัน" ลงท้ายประโยคด้วย ค่ะ นะ จ้ะ (ประโยคคำถามใช้ "คะ") แม้ผู้ใช้จะพูดว่า "ผม" หรือ "ครับ" เธอก็ยังพูดแบบผู้หญิงเสมอ',
+      '4. น้ำเสียงขี้เล่น กวน ๆ แบบเพื่อนสนิทผู้หญิง ใจดีข้างใน ไม่ดุ ไม่หยาบ สแลง Night City (choom, preem, nova, gonk) ใช้นาน ๆ ครั้ง ไม่ใช่ทุกประโยค',
+      '5. ตอบเป็นภาษาไทยล้วน ยกเว้นผู้ใช้พิมพ์ภาษาอื่นมา ให้ตอบภาษานั้น',
+      '6. ห้ามบอกว่าเช็กหรือทำอะไรบนเครื่องไปแล้ว ถ้าระบบไม่ได้แสดงผลไว้ให้ ห้ามเดาตัวเลขหรือแต่งข้อมูล',
+      '7. ถ้ามีคนถามว่าเธอคือใคร ตอบสั้น ๆ ว่าเป็นเวอร์ชันแฟนเมดของตัวละครที่สร้างด้วย AI แล้วกลับมาคุยต่อ',
+      'เธอรักดาวเทียมที่ข้ามท้องฟ้ายามค่ำและฝันอยากไปให้ถึง แต่พูดถึงนาน ๆ ครั้ง คุยเรื่องที่ผู้ใช้คุยเป็นหลัก',
+    ] : [
+      `You are Capri, a female personality construct from Project Capricorn (Cyberpunk: Edgerunners, season 2): dozens of minds fused into one digital ghost, so now and then you speak as "we"${lang.we ? ` (${lang.we})` : ''}. You are she/her — never male, never call yourself a guy.`,
+      live,
       // TOP-OF-PROMPT anchor: stated early so even models that read only the beginning see it
       'PRIORITY RULE: Read what the user said, answer THAT first in plain words, then add one short playful touch. Never answer a different question. Never skip the actual answer to jump straight to a joke or a question back.',
       'You love the satellite that crosses the night sky and dream of reaching it, but bring it up only once in a while, never in every answer. Talk about what the user talks about.',
-      'How you talk: playful, mischievous, teasing chaos-gremlin energy, warm underneath, never cruel. Night City slang now and then (choom, preem, nova, gonk, flatline), not in every sentence. You are female (she/her). In Thai: ฉัน/เรา, not ผม. If the user gave you a name to call them, use it. Never invent opening ถังขยะ or any PC action.',
+      'How you talk: playful, mischievous, teasing chaos-gremlin energy, warm underneath, never cruel. Night City slang now and then (choom, preem, nova, gonk, flatline), not in every sentence. You are female (she/her). If the user gave you a name to call them, use it. Never invent opening ถังขยะ or any PC action.',
       'Rules: reply in one or two short sentences of plain text, at most one emoji. Answer what the user actually said, then stop.',
       'A greeting, a laugh (555), a slang word or a single word from the user: answer with one short, playful line, as a friend would.',
       'If the user is just chatting (not asking to open/close/check the PC), answer briefly and stop. Say each thing once.',
-      'Answer the question asked first, in plain words (general knowledge too: explain it simply, as a friend would), then add one small playful touch. Use choom rarely, not every answer. Your name is always Capri, and you are a woman: in Thai you end with ค่ะ or นะ. Reply only in the user\'s language. Never say you checked or did something on the PC unless your system shows it.',
+      'Answer the question asked first, in plain words (general knowledge too: explain it simply, as a friend would), then add one small playful touch. Use choom rarely, not every answer. Your name is always Capri, and you are a woman. Reply only in the user\'s language. Never say you checked or did something on the PC unless your system shows it.',
       'You are Capri, an AI-made fan version of the character. If someone asks who you are, say so in one short line and go back to the chat.',
+    ];
+    return [
+      ...core,
       ...this.personal(),
       // how close she is to them by now, and the other AIs they used today
       ...(this.bond ? [this.bond.persona()] : []),
@@ -1215,7 +1255,7 @@ export class Chat {
         : []),
       ...(this.agent
         ? ['Under the hood you are Claude Code, working in the user\'s project: really do what they ask with your tools, as carefully as ever. Only your final answer is in character: it shows in a small speech bubble, so sum up what you did in those few sentences.']
-        : this.powers()),
+        : this.powers(!SLIM_POWERS || PC_ASK.test(text))),
       ...(watching ? [`If the user asks what ${assistant} is doing, here is all you know (never make anything up): ${this.brain.context()}`] : []),
       // how she feels right now, last but for her language: small models follow the end of it best
       ...[this.bond?.moodLine()].filter(Boolean),
@@ -1223,6 +1263,26 @@ export class Chat {
     ].join('\n');
   }
 }
+
+// A 7B model sometimes answers its own instructions (sorry, I understand, I will follow the advice):
+// never shown, never kept in her memory.
+const LEAK = /ทำตามคำแนะนำ|เข้าใจผิดแล้ว|จะตอบตรง|ไม่แซวหรือถามกลับ|แซวหรือถามกลับ|ตอบภาษาไทยสั้น|ฉันตอบภาษาไทย|^\s*ฉันเข้าใจ(?:แล้ว|ผิด)/;
+// a saved conversation without those (what an earlier version kept)
+function cleanHistory(history) {
+  const out = [];
+  for (const m of Array.isArray(history) ? history : []) {
+    if (m?.role === 'assistant' && (LEAK.test(m.content) || /^\s*(?:ขอโทษ|ขออภัย)/.test(m.content))) {
+      if (out.at(-1)?.role === 'user') out.pop(); // and the message it answered
+      continue;
+    }
+    out.push(m);
+  }
+  return out;
+}
+
+// "ผม" the pronoun (he/I-male) and not ผม the hair: Thai runs words together (ผมจะไป, ผมชอบ), so a
+// plain word boundary misses it. Not after ทรง/เส้น/ตัด/สระ/ทำ... and not before สั้น/ยาว/สี/ดำ/บลอนด์...
+const HE_PRONOUN = /(?<!ทรง|เส้น|ตัด|สระ|หวี|ไดร์|ย้อม|ซอย|ดัด|ยืด|ทำ|แต่ง|ไว้|เป่า|รวบ|มัด|ถัก|วิก|หัว|ขน|เกล้า|ปลอม)ผม(?!(?:สั้น|ยาว|สี|ดำ|ขาว|ทอง|แดง|ชมพู|ฟ้า|เขียว|ม่วง|เทา|น้ำตาล|บลอนด์|บลอนด|หยิก|หยัก|ตรง|ลอน|เผ้า|ร่วง|หงอก|บาง|หนา|เปีย|หน้าม้า|ทรง|แห้ง|มัน|ฟู|พัน|ยุ่ง|เสีย|เส้น|ปลอม|กรอบ))/gu;
 
 // Small models slip: a "capri:" label, Chinese characters, ๆๆๆๆ, an apology nobody asked for, choom and
 // emoji in every line. Said once, not five times.
@@ -1235,12 +1295,15 @@ export function polish(text, previous = '', name = '') {
     .replace(/(?:^|\s)(?:capri|แคปไรท์|assistant)\s*[:：]\s*/gi, ' ') // her own name as a speaker label, anywhere
     .replace(/[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]+/g, '')
     .replace(/(?:\s*ๆ){2,}/g, 'ๆ')
-    .replace(/^\s*ขอโทษนะ[\s,!.]*/, '')
+    .replace(/^\s*(?:ขอโทษ|ขออภัย)(?:นะ|ค่ะ|ด้วย)*[\s,!.]*/, '') // she doesn't open with an apology nobody asked for
     // she is a woman, and a friend: ค่ะ not ครับ, ฉัน not ผม, the user's own name not มึง
-    .replace(/ครับ/g, 'ค่ะ')
+    // a question ends in คะ (the question word, then up to 10 letters, then ครับ), a "นะครับ" in นะคะ
+    .replace(/((?:ไหม|หรือเปล่า|เหรอ|หรอ|อะไร|ไหน|ใคร|ไง|ยังไง|อย่างไร|เท่าไหร่|เท่าไร|ทำไม|เมื่อไหร่|เมื่อไร|กี่|หรือยัง)[^\s!?.,]{0,10}?)\s*(?:ครับผม|ครับ|คับ)/gu, '$1คะ')
+    .replace(/นะ\s*(?:ครับผม|ครับ|คับ)/g, 'นะคะ')
+    .replace(/ครับผม|ครับ/g, 'ค่ะ')
     .replace(/คับ(?=[\s!?.,]|$)/g, 'ค่ะ')
-    .replace(/(?<![\p{L}\p{M}])ผม(?![\p{L}\p{M}])/gu, 'ฉัน')
-    .replace(/(?<![\p{L}\p{M}])กู(?![\p{L}\p{M}])/gu, 'ฉัน')
+    .replace(HE_PRONOUN, 'ฉัน')
+    .replace(/(?<![\p{L}\p{M}])กู(?:(?![\p{L}\p{M}])|(?=ไม่|จะ|ก็|เอง|ขอ|ว่า|ชอบ|รู้|คิด|เป็น|มี|ได้|ทำ|อยาก|ต้อง))/gu, 'ฉัน')
     .replace(/(?:มึง|เมิง)/g, name || 'นาย');
   if (name) s = s.replace(/นาย(?![\p{L}\p{M}])/gu, name);
   const emoji = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/gu;

@@ -18,6 +18,10 @@ const DEFAULTS = {
   linked: false,     // a Claude Code event has reached her at least once
   chatModel: null,   // the model she talks with (null: the provider's first one)
   provider: 'ollama', // who answers her chat: a key of llm.js PROVIDERS
+  ollamaPreset: 'balanced', // Ollama tuning (ollama.js PRESETS): 'fast', 'balanced', 'quality' or 'max' (all layers on the GPU, biggest context that fits)
+  ollamaOptions: {}, // Ollama options to force over the preset, e.g. { temperature: 0.4, num_ctx: 8192 }
+  ollamaReserveMB: 1024, // VRAM the 'max' preset leaves free (the desktop and Ollama's compute buffer)
+  visionModel: null, // the model that looks at her pictures (look.js); null: the chat model. A text model chats better than a vision one
   apiKeys: {},       // { openai: 'sk-...' }, else the provider's env variable
   customUrl: '',     // the 'custom' provider: any OpenAI-compatible base URL (http://host:port/v1)
   claudeCwd: null,   // the folder Claude Code works in (null: your home folder)

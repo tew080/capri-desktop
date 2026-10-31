@@ -32,6 +32,14 @@ const SOUND_EXT = /\.(mp3|wav|ogg|m4a)$/i;
 
 const OLLAMA_SITE = 'https://ollama.com';
 
+// Ollama's server settings, for an Ollama this app starts (it inherits them). One that is already
+// running keeps its own: set the same variables in Windows (setx) and restart it. Flash attention
+// and a q8 KV cache roughly halve the memory a long context takes; one model, one request at a
+// time, so nothing is reserved for parallel use.
+for (const [key, value] of Object.entries({
+  OLLAMA_FLASH_ATTENTION: '1', OLLAMA_KV_CACHE_TYPE: 'q8_0', OLLAMA_NUM_PARALLEL: '1', OLLAMA_MAX_LOADED_MODELS: '1',
+})) process.env[key] ??= value;
+
 protocol.registerSchemesAsPrivileged([
   { scheme: 'capri', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },
 ]);
@@ -46,6 +54,7 @@ let lastWindows = null;
 let chatModels = null; // the provider's models, as last seen (null: not reached)
 let chatError = null;  // why not, when the provider said
 let chatErrorCode = null; // 'nokey' or 'nourl': what her setup should ask for
+let ollamaLine = null; // how the model runs now, for her menu: 'GPU 100% · ctx 8192'
 // Ollama's cloud, as last seen: your account ({ name } or { signin }) and the models free with it
 let cloud = { at: 0, account: null, free: [] };
 const chats = new Map(); // id -> AbortController of an answer being streamed
@@ -343,6 +352,11 @@ function rendererConfig() {
 
 function updateConfig(patch) {
   config.save(patch);
+  if ('ollamaPreset' in patch || 'ollamaOptions' in patch || 'ollamaReserveMB' in patch) {
+    ollama.configure(config.load());
+    const model = pickModel();
+    if (config.load().provider === 'ollama' && model) llm.warm('ollama', model); // loaded again with the new settings
+  }
   if ('rest' in patch) {
     fitOverlay(); // the taskbar in her window or not
     windowWatch?.refresh();
@@ -455,6 +469,30 @@ function rebuildTray() {
           ...(cloud.account?.signin ? [{ label: t.cloudSignin, click: signInToOllama }] : []),
         ] : []),
         { type: 'separator' },
+        // Ollama's tuning: presets for how steady, how fast, how much VRAM
+        ...(cfg.provider === 'ollama' ? [
+          {
+            label: 'ปรับแต่ง AI (Ollama)',
+            submenu: [
+              ...Object.entries(ollama.PRESETS).map(([key, p]) => ({
+                label: p.label, type: 'radio', checked: (cfg.ollamaPreset || 'balanced') === key, click: () => updateConfig({ ollamaPreset: key }),
+              })),
+              { type: 'separator' },
+              { label: ollamaLine || 'ยังไม่ได้โหลดโมเดล', enabled: false },
+              { label: 'ตรวจใหม่', click: () => refreshOllamaLine() },
+            ],
+          },
+          {
+            label: 'โมเดลมองภาพ (ตอนให้ดูหน้าจอ)',
+            submenu: [
+              { label: 'ใช้โมเดลเดียวกับแชท', type: 'radio', checked: !cfg.visionModel, click: () => updateConfig({ visionModel: null }) },
+              ...(chatModels || []).map((name) => ({
+                label: name, type: 'radio', checked: cfg.visionModel === name, click: () => updateConfig({ visionModel: name }),
+              })),
+            ],
+          },
+          { type: 'separator' },
+        ] : []),
         ...(cfg.provider === 'claude' ? [
           { label: `Claude Code: ${cfg.claudeCwd || app.getPath('home')}`, click: pickClaudeFolder },
           {
@@ -594,6 +632,23 @@ function pickModel(cfg = config.load()) {
   return chatModels.find((m) => !ollama.isCloud(m)) || chatModels[0];
 }
 
+// The model that looks at her pictures: the one picked for it (Ollama), else the chat model.
+function pickVisionModel(cfg = config.load()) {
+  if (cfg.provider === 'ollama' && cfg.visionModel && chatModels?.includes(cfg.visionModel)) return cfg.visionModel;
+  return pickModel(cfg);
+}
+
+// Where the Ollama model runs now (how much on the GPU, what context), for her menu.
+async function refreshOllamaLine() {
+  const model = pickModel();
+  const where = config.load().provider === 'ollama' && model && !ollama.isCloud(model) ? await ollama.status(model).catch(() => null) : null;
+  const gb = (n) => (n / 2 ** 30).toFixed(1);
+  ollamaLine = where
+    ? `${model}: GPU ${where.gpuPercent}%${where.ctx ? ` · ctx ${where.ctx}` : ''}${where.gpuTotal ? ` · VRAM ${gb(where.gpuUsed)}/${gb(where.gpuTotal)} GB` : ''}${where.gpuPercent < 100 ? ' ⚠' : ''}`
+    : null;
+  rebuildTray();
+}
+
 async function refreshModels() {
   const cfg = config.load();
   chatError = null;
@@ -694,7 +749,7 @@ async function sayAboutSnap({ id, persona, prompt, history = [] }) {
   if (!image) return { ok: false, error: 'the picture is gone' };
   const cfg = config.load();
   if (!chatModels?.length) await refreshModels();
-  const model = pickModel(cfg);
+  const model = pickVisionModel(cfg);
   if (!model) return { ok: false, code: 'noai' };
   if (cfg.provider === 'claude') return { ok: false, code: 'novision', model: 'Claude Code' };
   if (cfg.provider === 'ollama' && !(await ollama.canSee(model))) return { ok: false, code: 'novision', model };
@@ -810,6 +865,7 @@ function registerIpc() {
       const cfg = config.load();
       const text = await chatWithFallback(cfg, messages, send, abort.signal, () => streamed);
       if (cfg.provider === 'claude') saveMemory({ claude: llm.claudeMemory() });
+      if (cfg.provider === 'ollama') refreshOllamaLine();
       return { ok: true, text };
     } catch (err) {
       return { ok: false, error: abort.signal.aborted ? 'stopped' : err.message, code: err.code || null };
@@ -1218,6 +1274,7 @@ function main() {
     globalShortcut.register('Control+Alt+C', () => toggleVisible());
     if (!globalShortcut.register('Control+Alt+X', locateCapri)) console.warn('[capri] Ctrl+Alt+X is taken by another app');
     llm.restoreClaude(readMemory().claude);
+    ollama.configure(config.load());
     refreshModels(); // for her menu's model list
     setTimeout(() => morningRainTip().catch(() => {}), 25000); // once her intro and welcome are done
     setTimeout(() => launch.launchables().catch(() => {}), 20000); // what she can open, before you ask
