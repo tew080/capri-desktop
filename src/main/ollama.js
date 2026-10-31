@@ -81,6 +81,15 @@ function warm(model) {
   }).catch(() => {});
 }
 
+// A small model stuck repeating itself: the same 24 characters, three times over.
+function looping(text) {
+  if (text.length < 80) return false;
+  const tail = text.slice(-24);
+  let n = 0;
+  for (let i = text.indexOf(tail); i >= 0; i = text.indexOf(tail, i + 1)) n++;
+  return n >= 3;
+}
+
 // Her answer, streamed: onDelta(piece) as it comes, resolves with all of it.
 async function chat({ model, messages }, onDelta, signal) {
   // cloud models think before they answer, and that counts in num_predict: kept short, with room for it
@@ -94,7 +103,14 @@ async function chat({ model, messages }, onDelta, signal) {
       stream: true,
       keep_alive: '15m', // she stays loaded while you chat
       ...(thinks && { think: 'low' }),
-      options: { temperature: 0.85, num_predict: thinks ? 1200 : 240 },
+      options: {
+        temperature: 0.7,
+        top_p: 0.9,
+        repeat_penalty: 1.18, // small models (7B) in Thai love to loop: this punishes it
+        repeat_last_n: 256,
+        stop: ['\ncapri:', '\nCapri:', '\nUser:'], // she never writes the next turn herself
+        num_predict: thinks ? 1200 : 120, // she talks in 1-2 short sentences
+      },
     }),
     signal,
   });
@@ -115,6 +131,7 @@ async function chat({ model, messages }, onDelta, signal) {
       if (piece) {
         text += piece;
         onDelta(piece);
+        if (looping(text)) return text; // leaving the loop closes the stream: Ollama stops generating
       }
       if (msg.done) return text;
     }

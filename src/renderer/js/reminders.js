@@ -4,7 +4,7 @@
 // the smallest model. They're kept in her settings and survive a restart; one that came due while
 // she was off, she brings up when she's back.
 
-const TRIGGER = /(rappelle[- ]?(?:moi|nous)|fais[- ]moi penser|pense à me (?:le )?(?:rappeler|dire)|n['’]oublie pas de me (?:le )?(?:rappeler|dire)|mets[- ]moi un rappel|remind me|set (?:a|an) (?:reminder|alarm)|recu[eé]rd(?:a|e)me|recordarme|av[ií]same|pon(?:me)? un recordatorio|me lembr[ae]|lembr[ae][- ]me|me avis[ae]|cri[ae] um lembrete|напомни(?:те)?(?: мне)?|поставь напоминание|เตือน(?:ฉัน|หน่อย)?|แจ้งเตือน|อย่าลืมเตือน|ตั้ง(?:การ)?แจ้งเตือน|เตือนให้(?:ฉัน)?|ตั้งเตือน)/i;
+const TRIGGER = /(rappelle[- ]?(?:moi|nous)|fais[- ]moi penser|pense à me (?:le )?(?:rappeler|dire)|n['’]oublie pas de me (?:le )?(?:rappeler|dire)|mets[- ]moi un rappel|remind me|set (?:a|an) (?:reminder|alarm)|recu[eé]rd(?:a|e)me|recordarme|av[ií]same|pon(?:me)? un recordatorio|me lembr[ae]|lembr[ae][- ]me|me avis[ae]|cri[ae] um lembrete|напомни(?:те)?(?: мне)?|поставь напоминание|เตือน(?:ฉัน|ผม|หนู|เรา|หน่อย)?|แจ้งเตือน|อย่าลืมเตือน|ตั้ง(?:การ)?แจ้งเตือน|เตือนให้(?:ฉัน)?|ตั้งเตือน|จับเวลา|ตั้งเวลา|นับถอยหลัง|ตั้งไทม์เมอร์|set (?:a )?timer|timer for|countdown|minuteur|temporizador|cron[oô]metro|таймер)/i;
 
 // small numbers said in words (in 5 of her languages)
 const WORDS = {
@@ -24,7 +24,11 @@ const NUM = `(\\d+(?:[.,]\\d+)?|${Object.keys(WORDS).sort((a, b) => b.length - a
 const UNIT = '(secondes?|seconds?|secs?|segundos?|секунд[уы]?|сек|s|วินาที|นาที|minutes?|minutos?|mins?|mn|минут[уы]?|мин|m|heures?|hours?|hrs?|horas?|час(?:а|ов)?|ч|h|ชั่วโมง)';
 const SOON = '(?:(?<![\\p{L}])(?:dans|in|en|em|daqui a|dentro de|через)|(?:ใน|อีก|ภายใน))';
 // "dans 20 min", "in 1 hour and 30 minutes", "через 2 часа"
-const IN = new RegExp(`${SOON}\\s+${NUM}\\s*${UNIT}(?![\\p{L}])(?:\\s*(?:et|and|y|e|и)?\\s*${NUM}\\s*${UNIT}(?![\\p{L}]))?`, 'iu');
+const IN = new RegExp(`${SOON}\\s+${NUM}\\s*${UNIT}(?![a-zA-Z\\u00C0-\\u024F\\u0400-\\u04FF])(?:\\s*(?:et|and|y|e|и)?\\s*${NUM}\\s*${UNIT}(?![a-zA-Z\\u00C0-\\u024F\\u0400-\\u04FF]))?`, 'iu');
+// "จับเวลา 30 วินาที", "เมื่อครบ 10 นาที", "after 5 min", "timer for 2 minutes"
+const AFTER = new RegExp(`(?:จับเวลา|ตั้งเวลา|ตั้งไทม์เมอร์|นับถอยหลัง|เมื่อครบ|ครบ|หลังจาก|หลัง|timer(?: for)?|countdown(?: of)?|after|minuteur(?: de)?|temporizador(?: de)?|таймер(?: на)?)\\s*${NUM}\\s*${UNIT}(?![a-zA-Z\\u00C0-\\u024F\\u0400-\\u04FF])`, 'iu');
+// the words of a timer that aren't what to remind you of
+const TIMER_WORDS = /จับเวลา|ตั้งเวลา|นับถอยหลัง|ตั้งไทม์เมอร์|(?:เมื่อ|พอ)?ครบเวลา|เมื่อครบ|ครบ|timer|countdown|minuteur|temporizador|таймер/giu;
 // "dans 1h30"
 const IN_HM = new RegExp(`${SOON}\\s+(\\d{1,2})\\s*h\\s*(\\d{1,2})(?!\\d)`, 'iu');
 // "dans une demi-heure", "in half an hour", "через полчаса", "dans un quart d'heure"
@@ -46,6 +50,15 @@ const LEAD = new RegExp("^(?:[\\s,:;.!?-]|d['’]|qu['’]|(?:capri|de que|de|qu
 
 const MAX_MS = 7 * 24 * 3600 * 1000;
 
+// Repeating: "ทุก 1 ชั่วโมง", "ทุกชั่วโมง", "every 2 hours", "toutes les 30 min", "cada hora", "каждые 2 часа".
+// Never more often than every 5 minutes, never rarer than every 7 days.
+const MIN_EVERY = 5 * 60 * 1000;
+const DAY_UNIT = /^(?:วัน|days?|jours?|d[ií]as?|дн(?:я|ей)|день)$/i;
+const EVERY = new RegExp(
+  `(?:ทุกๆ|ทุก|every|each|chaque|toutes les|tous les|toutes|tous|a cada|cada|todos los|todas las|каждые|каждый|каждую|раз в)\\s*${NUM}?\\s*(${UNIT.slice(1, -1)}|วัน|days?|jours?|d[ií]as?|дн(?:я|ей)|день)(?![a-zA-Z\\u00C0-\\u024F\\u0400-\\u04FF])`,
+  'iu',
+);
+
 function number(word) {
   if (!word) return NaN;
   const n = Number(word.replace(',', '.'));
@@ -54,9 +67,35 @@ function number(word) {
 
 function unitMs(unit) {
   const u = unit.toLowerCase();
-  if (/^(s|sec|secs|seconde|secondes|second|seconds|segundo|segundos|секунд|секунду|секунды|сек)$/.test(u)) return 1000;
-  if (/^(h|hr|hrs|heure|heures|hour|hours|hora|horas|час|часа|часов|ч)$/.test(u)) return 3600 * 1000;
+  if (/^(s|sec|secs|seconde|secondes|second|seconds|segundo|segundos|секунд|секунду|секунды|сек|วินาที)$/.test(u)) return 1000;
+  if (/^(h|hr|hrs|heure|heures|hour|hours|hora|horas|час|часа|часов|ч|ชั่วโมง)$/.test(u)) return 3600 * 1000;
   return 60 * 1000;
+}
+
+// How often, read off text: { ms, span } or null.
+export function parseEvery(text) {
+  const m = EVERY.exec(text);
+  if (!m) return null;
+  const n = m[1] ? number(m[1]) : 1;
+  if (!Number.isFinite(n) || n <= 0) return null;
+  const unit = DAY_UNIT.test(m[2]) ? 24 * 3600 * 1000 : unitMs(m[2]);
+  return { ms: Math.max(MIN_EVERY, Math.min(n * unit, MAX_MS)), span: m[0] };
+}
+
+// "every hour", as she says it: everyText(3600000, 'en') → "every hour".
+const EVERY_WORDS = {
+  th: { d: ['วัน', 'วัน'], h: ['ชั่วโมง', 'ชั่วโมง'], m: ['นาที', 'นาที'], one: (u) => `ทุก${u}`, many: (n, u) => `ทุก ${n} ${u}` },
+  en: { d: ['day', 'days'], h: ['hour', 'hours'], m: ['minute', 'minutes'], one: (u) => `every ${u}`, many: (n, u) => `every ${n} ${u}` },
+  fr: { d: ['jour', 'jours'], h: ['heure', 'heures'], m: ['minute', 'minutes'], one: (u) => `chaque ${u}`, many: (n, u) => `toutes les ${n} ${u}` },
+  es: { d: ['día', 'días'], h: ['hora', 'horas'], m: ['minuto', 'minutos'], one: (u) => `cada ${u}`, many: (n, u) => `cada ${n} ${u}` },
+  pt: { d: ['dia', 'dias'], h: ['hora', 'horas'], m: ['minuto', 'minutos'], one: (u) => `a cada ${u}`, many: (n, u) => `a cada ${n} ${u}` },
+  ru: { d: ['день', 'дн.'], h: ['час', 'ч.'], m: ['минуту', 'мин.'], one: (u) => `каждый ${u}`.replace('каждый минуту', 'каждую минуту'), many: (n, u) => `каждые ${n} ${u}` },
+};
+export function everyText(ms, lang = 'en') {
+  const w = EVERY_WORDS[lang] || EVERY_WORDS.en;
+  const [key, size] = ms % 86400000 === 0 ? ['d', 86400000] : ms % 3600000 === 0 ? ['h', 3600000] : ['m', 60000];
+  const n = Math.round(ms / size);
+  return n === 1 ? w.one(w[key][0]) : w.many(n, w[key][1]);
 }
 
 // When, read off text: { at (ms), spans: the parts of the text that said it }, or null.
@@ -67,6 +106,11 @@ export function parseWhen(text, now = Date.now()) {
   if (m) {
     let ms = number(m[1]) * unitMs(m[2]);
     if (m[3] && m[4]) ms += number(m[3]) * unitMs(m[4]);
+    if (Number.isFinite(ms) && ms > 0) return { at: now + ms, spans: [m] };
+  }
+  m = AFTER.exec(text);
+  if (m) {
+    const ms = number(m[1]) * unitMs(m[2]);
     if (Number.isFinite(ms) && ms > 0) return { at: now + ms, spans: [m] };
   }
   m = IN_HALF.exec(text);
@@ -123,13 +167,18 @@ export function parseWhen(text, now = Date.now()) {
 export function parseReminder(text, now = Date.now()) {
   const trigger = TRIGGER.exec(text);
   if (!trigger) return null;
-  const when = parseWhen(text, now);
-  let what = text;
-  for (const m of [trigger, ...(when?.spans || [])]) what = what.replace(m[0], ' ');
-  what = what.replace(PM, ' ').replace(AM, ' ').replace(TOMORROW, ' ').replace(POLITE, ' ');
+  // "every 2 hours" out first: its "2 hours" would read as a time of day
+  const every = parseEvery(text);
+  const src = every ? text.replace(every.span, ' ') : text;
+  const when = parseWhen(src, now);
+  let what = src;
+  for (const m of when?.spans || []) what = what.replace(m[0], ' '); // the time first: a timer's words hold it
+  what = what.replace(new RegExp(TRIGGER.source, 'giu'), ' ');
+  what = what.replace(/(?<![\p{L}\p{M}])set\s+(?:a|an)(?![\p{L}\p{M}])/giu, ' ').replace(TIMER_WORDS, ' ').replace(/(?<![\p{L}\p{M}])\d+\s*(?:วินาที|นาที|ชั่วโมง)\s*(?:แล้ว)?/gu, ' ').replace(/แล้ว(?:ก็)?\s*$/, ' ').replace(PM, ' ').replace(AM, ' ').replace(TOMORROW, ' ').replace(POLITE, ' ');
   what = what.replace(/\s+/g, ' ').replace(LEAD, '').replace(/[\s,;:.!?]+$/, '').trim().slice(0, 140);
-  const at = when && when.at - now >= 5000 && when.at - now <= MAX_MS ? when.at : null;
-  return { at, text: what };
+  let at = when && when.at - now >= 5000 && when.at - now <= MAX_MS ? when.at : null;
+  if (every && !at) at = now + every.ms; // no start said: the first one is one period from now
+  return { at, text: what, ...(every && { every: every.ms }) };
 }
 
 // When a reminder is for, as she says it: the time, with the day if it isn't today.
@@ -159,11 +208,24 @@ export class Reminders {
     return [...this.list].sort((a, b) => a.at - b.at);
   }
 
-  add(at, text) {
-    const r = { id: `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, at, text, made: Date.now() };
+  // `every` (ms): a repeating one, which comes back by itself once it's been dealt with (complete)
+  add(at, text, every = 0) {
+    const r = { id: `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, at, text, made: Date.now(), ...(every > 0 && { every }) };
     this.list = [...this.list, r];
     this.save();
     return r;
+  }
+
+  // Dealt with (done, or seen): a one-off goes, a repeating one is set for its next turn on its own
+  // schedule (skipping the ones missed while she was off). Cancelling is still remove().
+  complete(id) {
+    const r = this.list.find((x) => x.id === id);
+    if (!r?.every) return this.remove(id);
+    this.firing.delete(id);
+    const next = r.at + (Math.floor((Date.now() - r.at) / r.every) + 1) * r.every;
+    this.list = this.list.map((x) => (x.id === id ? { ...x, at: next } : x));
+    this.save();
+    return undefined;
   }
 
   remove(id) {

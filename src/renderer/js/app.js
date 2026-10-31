@@ -364,9 +364,10 @@ async function boot() {
     const t = brain.t.remind;
     const time = clock(r.at, brain.lang);
     const missed = r.at < startedAt - 60000;
+    const name = brain.custom?.userName ? ` ${brain.custom.userName}` : ' นาย'; // what she calls you (Thai lines use {name})
     const line = missed
-      ? fmt(r.text ? t.missed : t.missedBare, { text: r.text, time })
-      : fmt(pick(r.text ? t.now : t.nowBare), { text: r.text });
+      ? fmt(r.text ? t.missed : t.missedBare, { text: r.text, time, name })
+      : fmt(pick(r.text ? t.now : t.nowBare), { text: r.text, name });
     let answered = false;
     const onAction = (id) => {
       answered = true;
@@ -377,7 +378,7 @@ async function boot() {
         else panel.say({ kind: 'info', face: 'smug', line: t.snoozed, hold: 2500 });
         return;
       }
-      reminders.remove(r.id);
+      reminders.complete(r.id); // a repeating one comes back on its own
       bond.add('remind', 2);
       panel.setActions([]);
       if (chat.open) chat.interject(pick(t.doneLine), [], null);
@@ -389,7 +390,7 @@ async function boot() {
     if (chat.open && chat.interject(line, actions, onAction)) {
       // read in the chat: closed (or talked over) without a button, it counts as seen
       while (!answered && chat.open) await wait(1000);
-      if (!answered) reminders.remove(r.id);
+      if (!answered) reminders.complete(r.id);
       return;
     }
     if (capri.stowed) {
@@ -406,7 +407,7 @@ async function boot() {
       // closed without an answer: seen, if it was up long enough to read; else back in a couple of minutes
       onLeave: () => {
         if (answered) return;
-        if (performance.now() - shownAt > 2500) reminders.remove(r.id);
+        if (performance.now() - shownAt > 2500) reminders.complete(r.id);
         else reminders.snooze(r.id, 2 * 60 * 1000);
       },
     });
@@ -723,6 +724,25 @@ async function boot() {
       case 'stow': // Ctrl+Alt+C: into her biochip, or back out
         if (cmd.on) capri.stow();
         else capri.unstow();
+        break;
+      case 'locate': { // Ctrl+Alt+X: "where is she?" — out of her biochip, to the middle of the screen, one line
+        if (capri.stowed) {
+          host.setConfig({ visible: true });
+          await capri.unstow();
+        }
+        capri.wake();
+        if (capri.stance === 'peek') await capri.unpeek();
+        panel.hide();
+        const spot = capri.spot('post');
+        await capri.teleport(spot && typeof spot === 'object' && 'x' in spot ? { ...spot, x: cmd.x } : spot);
+        capri.perform('hop');
+        panel.say({ kind: 'info', face: 'laugh', line: cmd.line, hold: 3500 });
+        break;
+      }
+      case 'rainTip': // first start of the day, rain likely: she says to take an umbrella (main.js)
+        if (capri.stowed || capri.dormant || chat.open || guide.running || panel.visible) break; // not over something else
+        capri.perform('hop');
+        panel.say({ kind: 'info', face: 'look', line: cmd.line, hold: 7000 });
         break;
       case 'satellite': // the whole sequence, on demand (tray)
         if (capri.stowed) {

@@ -228,6 +228,50 @@ function toggleVisible(force) {
   rebuildTray();
 }
 
+// Ctrl+Alt+X: "where is she?" She comes out of her biochip if stowed, jumps to the middle of the
+// screen she's on and says one line. The overlay gets { x, y } (its own css px) and the line.
+const LOCATE_LINES = {
+  th: ['อยู่นี่ไง ไม่ได้หายไปไหนสักหน่อย 😄', 'โผล่แล้วค่ะ! หาฉันอยู่ใช่ไหมล่ะ', 'ฉันอยู่ตรงนี้จ้ะ ไม่ต้องตกใจ'],
+  en: ['Right here, I never left.', 'Found me! Miss me?', 'Over here, ghost on duty.'],
+  fr: ['Je suis là, je n’ai pas bougé.', 'Coucou, tu me cherchais ?'],
+  es: ['¡Aquí estoy, no me he ido!', 'Me encontraste, ¿me buscabas?'],
+  pt: ['Tô aqui, não fui a lugar nenhum!', 'Me achou! Tava me procurando?'],
+  ru: ['Я здесь, никуда не пропадала.', 'Нашёл меня? Скучал?'],
+};
+function locateCapri() {
+  if (!overlay || overlay.isDestroyed()) return;
+  if (!config.load().visible) toggleVisible(true); // out of her biochip first
+  const { area } = overlayArea();
+  const lines = LOCATE_LINES[resolveLang(config.load().lang)] || LOCATE_LINES.en;
+  raiseOverlay();
+  sendCommand('locate', { x: Math.round(area.width / 2), y: Math.round(area.height / 2), line: lines[Math.floor(Math.random() * lines.length)] });
+}
+
+// Morning rain tip: the first time she starts each day, if rain is likely, she says to take an umbrella.
+// Kept in memory.json (rainTip: on/off, rainTipDay: the day it was last looked at), toggled from her menu.
+const RAIN_TIP = {
+  th: 'วันนี้ฝนมา {pct}% นะ พกร่มด้วยค่ะ เดี๋ยวเปียกแล้วฉันจะแซว ☔',
+  en: 'Rain chance today is {pct}%. Take an umbrella! ☔',
+  fr: 'Il y a {pct}% de risque de pluie aujourd’hui. Prends un parapluie ! ☔',
+  es: 'Hoy hay {pct}% de probabilidad de lluvia. ¡Lleva paraguas! ☔',
+  pt: 'Hoje tem {pct}% de chance de chuva. Leva guarda-chuva! ☔',
+  ru: 'Сегодня вероятность дождя {pct}%. Возьми зонт! ☔',
+};
+const RAIN_AT = 60; // % chance of rain from which she says it
+const rainTipOn = () => readMemory().rainTip !== false;
+
+async function morningRainTip() {
+  if (!rainTipOn()) return;
+  const day = new Date().toLocaleDateString('en-CA'); // YYYY-MM-DD, local
+  if (readMemory().rainTipDay === day) return;
+  const w = await launch.weather('').catch(() => null);
+  if (!w?.ok) return; // offline: tried again next start, the day isn't marked
+  saveMemory({ rainTipDay: day });
+  if (w.data.rainChance < RAIN_AT) return;
+  const line = (RAIN_TIP[resolveLang(config.load().lang)] || RAIN_TIP.en).replace('{pct}', w.data.rainChance);
+  sendCommand('rainTip', { line });
+}
+
 function playDemo() {
   clearTimeout(demoTimer);
   const steps = demoSteps(resolveLang(config.load().lang)); // in her language
@@ -333,7 +377,7 @@ function rebuildTray() {
       label: t.reminders,
       submenu: reminders.length
         ? reminders.map((r) => ({
-          label: `${when(r.at)} · ${(r.text || '…').slice(0, 50)}`,
+          label: `${r.every ? '🔁 ' : ''}${when(r.at)} · ${(r.text || '…').slice(0, 50)}`,
           submenu: [{ label: t.cancelReminder, click: () => cancelReminder(r.id) }],
         }))
         : [{ label: t.noReminders, enabled: false }],
@@ -416,6 +460,10 @@ function rebuildTray() {
     { label: t.possess, type: 'checkbox', checked: cfg.possess, click: (item) => updateConfig({ possess: item.checked }) },
     { label: t.jealous, type: 'checkbox', checked: cfg.jealous !== false, click: (item) => updateConfig({ jealous: item.checked }) },
     { label: t.pcReact, type: 'checkbox', checked: cfg.pcReact !== false, click: (item) => updateConfig({ pcReact: item.checked }) },
+    {
+      label: t.rainTip, type: 'checkbox', checked: rainTipOn(),
+      click: (item) => { saveMemory({ rainTip: item.checked }); rebuildTray(); },
+    },
     {
       // she asks first (what she'll send where), then turns it on herself
       label: t.lookAuto, type: 'checkbox', checked: Boolean(cfg.watchScreen),
@@ -844,10 +892,31 @@ function registerIpc() {
   ipcMain.handle('files:search', (_e, query) => files.search(query).catch(() => []));
   ipcMain.handle('files:open', (_e, { file, reveal }) => files.open(String(file), { reveal: Boolean(reveal) }).then(() => true, () => false));
   ipcMain.handle('files:screenshot', () => files.screenshot(targetDisplay()).catch(() => null));
+  // chat.js sends what she should open, as JSON: { q, tab (isch|vid|nws|shop), maps, route: { from, to, mode } }
   ipcMain.handle('web:search', (_e, query) => {
-    const q = String(query || '').trim().slice(0, 300);
-    if (!q) return false;
-    return shell.openExternal(`https://www.google.com/search?q=${encodeURIComponent(q)}`).then(() => true, () => false);
+    let spec = { q: String(query || '') };
+    try {
+      const parsed = JSON.parse(query);
+      if (parsed && typeof parsed === 'object') spec = parsed;
+    } catch {
+      // plain text: a normal search
+    }
+    const q = String(spec.q || '').trim().slice(0, 300);
+    const enc = encodeURIComponent;
+    let url;
+    if (spec.route?.to) {
+      const modes = ['driving', 'walking', 'transit', 'bicycling', 'two-wheeler'];
+      url = `https://www.google.com/maps/dir/?api=1&destination=${enc(String(spec.route.to).slice(0, 200))}`
+        + (spec.route.from ? `&origin=${enc(String(spec.route.from).slice(0, 200))}` : '') // no origin: where you are
+        + `&travelmode=${modes.includes(spec.route.mode) ? spec.route.mode : 'driving'}`;
+    } else if (!q) {
+      return false;
+    } else if (spec.maps) {
+      url = `https://www.google.com/maps/search/?api=1&query=${enc(q)}`;
+    } else {
+      url = `https://www.google.com/search?q=${enc(q)}${['isch', 'vid', 'nws', 'shop'].includes(spec.tab) ? `&tbm=${spec.tab}` : ''}`;
+    }
+    return shell.openExternal(url).then(() => true, () => false);
   });
   ipcMain.handle('apps:launch', (_e, item) => launch.launch(item).then(() => ({ ok: true }), (err) => ({ ok: false, error: err.message })));
   ipcMain.handle('apps:media', (_e, action) => launch.media(action));
@@ -894,6 +963,80 @@ function registerIpc() {
         .map((f) => ({ name: f.replace(SOUND_EXT, '').toLowerCase(), url: `capri://usersounds/${encodeURIComponent(f)}` }));
     } catch {
       return [];
+    }
+  });
+  ipcMain.handle('pc:status', async (_event, what) => {
+    return launch.pcStatus(what || 'all');
+  });
+  // Status terminal window — reuse if already open so the next scan updates instead of vanishing
+  let statusWin = null;
+  let statusCloseTimer = null;
+  const armStatusClose = () => {
+    if (statusCloseTimer) clearTimeout(statusCloseTimer);
+    statusCloseTimer = setTimeout(() => {
+      statusCloseTimer = null;
+      if (statusWin && !statusWin.isDestroyed()) statusWin.close();
+    }, 90000);
+  };
+  ipcMain.handle('pc:statusCard', async (_event, payload) => {
+    try {
+      if (!payload?.text && !payload?.data) return { ok: false, error: 'no data' };
+      const html = launch.statusDashboardHtml(payload);
+      const dir = path.join(app.getPath('userData'), 'status');
+      fs.mkdirSync(dir, { recursive: true });
+      // unique file each time so loadFile/reload is not served from cache
+      const file = path.join(dir, `dashboard-${Date.now()}.html`);
+      fs.writeFileSync(file, html, 'utf8');
+      const title = payload?.view === 'process' ? 'CAPRI.NET — process' : 'CAPRI.NET — system';
+
+      if (statusWin && !statusWin.isDestroyed()) {
+        // reuse: reload content + retitle + keep window visible
+        statusWin.setTitle(title);
+        await statusWin.loadFile(file);
+        if (!statusWin.isVisible()) statusWin.showInactive();
+        else statusWin.moveTop();
+        armStatusClose();
+        return { ok: true, reused: true };
+      }
+
+      const b = overlay?.getBounds();
+      statusWin = new BrowserWindow({
+        width: 620,
+        height: 440,
+        x: b ? Math.round(b.x + b.width * 0.5 - 310) : undefined,
+        y: b ? Math.round(b.y + b.height * 0.32) : undefined,
+        show: false,
+        frame: true,
+        backgroundColor: '#0a0610',
+        alwaysOnTop: true,
+        skipTaskbar: false,
+        resizable: true,
+        title,
+        autoHideMenuBar: true,
+        webPreferences: {
+          contextIsolation: true,
+          nodeIntegration: false,
+          sandbox: true,
+        },
+      });
+      statusWin.setMenuBarVisibility(false);
+      statusWin.on('closed', () => {
+        statusWin = null;
+        if (statusCloseTimer) {
+          clearTimeout(statusCloseTimer);
+          statusCloseTimer = null;
+        }
+      });
+      await statusWin.loadFile(file);
+      statusWin.once('ready-to-show', () => {
+        if (!statusWin || statusWin.isDestroyed()) return;
+        statusWin.showInactive();
+      });
+      armStatusClose();
+      return { ok: true };
+    } catch (err) {
+      console.error('[capri] status card failed:', err);
+      return { ok: false, error: err.message };
     }
   });
 }
@@ -1048,8 +1191,10 @@ function main() {
       onDebug: DEV ? debugHandler : null,
     });
     globalShortcut.register('Control+Alt+C', () => toggleVisible());
+    if (!globalShortcut.register('Control+Alt+X', locateCapri)) console.warn('[capri] Ctrl+Alt+X is taken by another app');
     llm.restoreClaude(readMemory().claude);
     refreshModels(); // for her menu's model list
+    setTimeout(() => morningRainTip().catch(() => {}), 25000); // once her intro and welcome are done
     setTimeout(() => launch.launchables().catch(() => {}), 20000); // what she can open, before you ask
     // a screen plugged in, unplugged, or rearranged: her window fitted again, and she learns of it
     const screensChanged = () => {

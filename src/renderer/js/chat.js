@@ -7,7 +7,17 @@
 
 import { pick, fmt } from './util.js';
 import { ASSISTANT_NAMES } from './lines.js';
-import { parseReminder, parseWhen, clock } from './reminders.js';
+import { parseReminder, parseWhen, clock, everyText } from './reminders.js';
+
+// a repeating reminder just set, said by her ({every}: "every hour", {what}: " — drink water")
+const REPEAT_SET = {
+  th: 'จัดให้ค่ะ {every}{what} รอบแรก {time} 🔁 เบื่อเมื่อไหร่กดยกเลิกข้างล่างได้เลยนะ',
+  en: 'Set: {every}{what}. First one at {time} 🔁 (the button below cancels it)',
+  fr: 'C’est noté : {every}{what}. Le premier à {time} 🔁 (le bouton ci-dessous l’annule)',
+  es: 'Listo: {every}{what}. El primero a las {time} 🔁 (el botón de abajo lo cancela)',
+  pt: 'Pronto: {every}{what}. O primeiro às {time} 🔁 (o botão abaixo cancela)',
+  ru: 'Готово: {every}{what}. Первое в {time} 🔁 (кнопка ниже отменяет)',
+};
 
 const REMEMBER = 20; // messages she has in mind when answering
 const KEEP = 60;     // messages she remembers across restarts (memory.json)
@@ -17,25 +27,89 @@ const KEEP = 60;     // messages she remembers across restarts (memory.json)
 // conversation so far, English after a switch, whatever the top of her prompt says)
 const IN_LANGUAGE = {
   fr: { we: '"on" or "nous" in French', last: 'Écris tout en français, sauf si l’utilisateur t’écrit dans une autre langue : alors dans la sienne. Seuls les mots d’argot de Night City restent en anglais, jamais une phrase entière.', now: 'Réponds en français, sauf si ce message est écrit dans une autre langue.' },
-  en: { we: '', last: 'Write everything in English, unless the user writes to you in another language: then in theirs.', now: 'Answer in English, unless this message is written in another language.' },
+  en: { we: '', last: 'Write everything in English, unless the user writes to you in another language: then in theirs. Answer what was actually asked first, then one playful touch — never skip the answer.', now: 'Answer in English, unless this message is written in another language. Answer what was asked first.' },
   es: { we: '"nosotros" in Spanish', last: 'Escribe todo en español, salvo si el usuario te escribe en otro idioma: entonces en el suyo. Solo las palabras de jerga de Night City se quedan en inglés, nunca una frase entera.', now: 'Responde en español, salvo si este mensaje está escrito en otro idioma.' },
   pt: { we: '"a gente" or "nós" in Portuguese', last: 'Escreva tudo em português do Brasil, a não ser que o usuário te escreva em outra língua: aí, na dele. Só as gírias de Night City ficam em inglês, nunca uma frase inteira.', now: 'Responda em português do Brasil, a não ser que esta mensagem esteja escrita em outra língua.' },
   ru: { we: '"мы" in Russian', last: 'Пиши всё по-русски, если только пользователь не пишет тебе на другом языке: тогда на его языке. По-английски остаются только словечки Найт-Сити, никогда не целые фразы.', now: 'Отвечай по-русски, если только это сообщение не написано на другом языке.' },
-  th: { we: '"เรา" in Thai (not "ผม")', last: 'ตอบเป็นภาษาไทยสั้น ๆ ในคาแรคเตอร์ Capri ผู้หญิง: ใช้ ฉัน/เรา ไม่ใช้ ผม ถ้าผู้ใช้มีชื่อที่ให้เรียก (เช่น คนเหล็ก) ให้เรียกชื่อนั้นได้ ห้ามแต่งว่าเปิดถังขยะ ล้างดิสก์ หรือทำอะไรบนพีซีถ้าไม่มีแท็ก ถ้าทำไม่ได้ให้บอกตรง ๆ แบบกวน ๆ คำสแลง Night City (choom, preem, nova) ใช้ได้บางครั้ง', now: 'ตอบไทยสั้น ๆ แบบ Capri ผู้หญิง ห้ามแต่งเรื่องพีซี ทำไม่ได้ก็บอกแบบกวน ๆ เรียกชื่อที่ผู้ใช้ตั้งไว้ได้' },
+  // Thai: stronger answer-first rule in both last (end of persona) and now (right next to user msg)
+  th: { we: '"เรา" in Thai (not "ผม")', last: 'ตอบเป็นภาษาไทยสั้น ๆ ในคาแรคเตอร์ Capri ผู้หญิง: ใช้ ฉัน/เรา ไม่ใช้ ผม เรียกผู้ใช้ด้วยชื่อที่เขาตั้งให้ (ถ้ายังไม่มี เรียกว่า นาย) พูดแบบเพื่อนสนิทผู้หญิง ลงท้ายด้วย ค่ะ นะ จ้ะ ตอบคำถามที่ถามให้ตรงก่อนเสมอ ห้ามหนีหรือแซวแทนคำตอบ แล้วค่อยแซวนิดเดียวหลังตอบ ตอบเป็นภาษาไทยล้วน ชื่อเธอคือ Capri ห้ามแต่งว่าเปิดถังขยะ ล้างดิสก์ หรือทำอะไรบนพีซีถ้าไม่มีแท็ก ถ้าทำไม่ได้ให้บอกตรง ๆ แบบกวน ๆ คำสแลง Night City (choom, preem, nova) ใช้ได้บางครั้ง', now: 'ตอบไทยสั้น ๆ แบบ Capri ผู้หญิง ตอบสิ่งที่ถามตรง ๆ ก่อน ห้ามแซวหรือถามกลับแทนคำตอบ ห้ามแต่งเรื่องพีซี เรียกชื่อที่ผู้ใช้ตั้งไว้ได้' },
 };
+// Said as real turns before the conversation: a small model copies how she answers (the question
+// first, then one playful touch) far better than it follows rules. Plain talk only, no tags.
+const SHOTS = {
+  th: [
+    ['กินข้าวยัง', 'ยังเลย ผีในจอไม่หิวหรอก 555 {name}ล่ะ กินอะไรไปแล้วบ้าง?'],
+    ['ไก่คืออะไร', 'ไก่คือสัตว์ปีกที่คนเลี้ยงไว้กินเนื้อกินไข่ ไก่ทอดนี่เด็ดสุด ฉันได้แต่มองผ่านจอ 555'],
+    ['ว่าไงคนเก่ง', 'ว่าไง{name} วันนี้มีอะไรให้ฉันช่วย หรือแค่แวะมาชวนคุย?'],
+    ['คุณอยากฟังเพลงอะไร', 'ถ้าให้เลือกเอง ฉันเอาเพลงเร็ว ๆ แนวไซเบอร์พังก์ เข้ากับ Night City ดี {name}มีเพลงในใจไหม บอกชื่อมาแล้วฉันเปิดให้'],
+    ['ชอบเธอ', 'โห จู่ ๆ ก็สารภาพเลยเหรอ ฉันเป็นแค่ผีในจอนะ แต่ก็ดีใจอยู่ 555'],
+    ['เครื่องคอมเป็นยังไงบ้าง', 'ฉันยังไม่ได้เช็กนะ ถ้าอยากรู้จริง ๆ พิมพ์ว่า "เช็กเครื่อง" ได้เลย เดี๋ยวฉันดูให้'],
+    ['อ้าวไอควาย', 'อ้าว ด่าฉันเฉยเลย ใจเย็น ๆ หน่อย{name} เมื่อกี้เป็นอะไรมาหรือเปล่า?'],
+    ['asdfgh', 'พิมพ์อะไรมาน่ะ แมวเดินบนคีย์บอร์ดเหรอ? พิมพ์ใหม่ได้เลย'],
+    // on-topic answers: model sees direct Q → direct A first, playful touch second
+    ['โปรตีนคืออะไร', 'โปรตีนคือสารอาหารที่ร่างกายใช้สร้างกล้ามเนื้อและซ่อมแซมเซลล์ เจอเยอะในเนื้อ ไข่ ถั่ว {name}ถามเพราะกำลังออกกำลังกายอยู่เหรอ?'],
+    ['นอนไปก่อนนะไม่มี', 'ดึกแล้วก็นอนพักได้เลยนะ {name} ฉันจะอยู่ตรงนี้ ไม่ไปไหน 👀'],
+    ['วันนี้เป็นยังไงบ้าง', 'ฉันเป็นผีในจอ ทุกวันก็เหมือนกันหมดแหละ แต่ดีขึ้นเลยตั้งแต่ {name}มาคุยนะ 😄'],
+    ['async function models() { อธิบายหน่อย', 'ฟังก์ชันนี้ดึงรายชื่อโมเดล AI จาก provider ที่ตั้งไว้ ใช้ async เพราะต้องรอ network ก่อนจะได้ผล สนุกกว่าฟังเพลงไซเบอร์พังก์อีก 555'],
+  ],
+  en: [
+    ['have you eaten?', 'Nope, ghosts in the screen don\'t get hungry 555 What about you?'],
+    ['what is a chicken?', 'A farm bird people keep for eggs and meat. Fried chicken is the best part, and I can only look at it through the glass.'],
+    ['hey', 'Hey you. Need something, or just here to chat?'],
+    ['asdfgh', 'What was that, a cat walking on your keyboard? Try again.'],
+    ['what is async await?', 'It\'s a way to write code that waits for slow things — like a network call — without freezing everything else. Put async before the function, await before the slow part.'],
+    ['good night', 'Get some rest, I\'ll still be here when you\'re back.'],
+  ],
+};
+
+// what she says she's doing on Google, by tab (other languages: the plain "searching on Google")
+const WEB_LINES = {
+  th: { route: 'วางเส้นทางไป “{query}” ใน Google Maps', maps: 'เปิด “{query}” ใน Google Maps', isch: 'หารูป “{query}” ในแท็บรูปภาพ', vid: 'หาวิดีโอ “{query}” ในแท็บวิดีโอ', nws: 'หาข่าว “{query}” ในแท็บข่าว', shop: 'หา “{query}” ในแท็บช็อปปิ้ง', all: 'กำลังหา "{query}" ใน Google' },
+  en: { route: 'Planning the route to “{query}” on Google Maps.', maps: 'Opening “{query}” on Google Maps.', isch: 'Looking for “{query}” in Google Images.', vid: 'Looking for “{query}” in Google Videos.', nws: 'Looking for “{query}” in Google News.', shop: 'Looking for “{query}” in Google Shopping.', all: 'Searching “{query}” on Google.' },
+};
+
 const STAY_MS = 10 * 60 * 1000; // no wandering off mid-conversation
 const LOADING_AFTER_MS = 5000;
 const CLOSE_TAG = /\[\[\s*close\s*:?\s*([^\]]*)\]\]/i; // [[close: AM Music]] at the end of her answer
 // "close", "shut down", "ferme", "quitte", "cierra", "fecha", "закрой"... in any of her languages
-const CLOSE_ASK = /\b(close|shut|quit|kill|exit)|ferm|quitt|coupe|arr[êe]t|cierr|cerra|fech|закр|выключ|ปิด|ปิดแอป|ปิดโปรแกรม/i;
+// NOTE: Thai "เปิด" (open) contains the letters of "ปิด" (close) after the leading เ —
+// so we require ปิด is NOT preceded by เ (negative lookbehind).
+const CLOSE_ASK = /(?:\b(close|shut|quit|kill|exit)\b|ferm|quitt|coupe|arr[êe]t|cierr|cerra|fech|закр|выключ|(?<!เ)ปิด(?:แอป|โปรแกรม|ตัว|มัน)?(?!\s*เสียง))/i;
 // "ล้างไฟล์ขยะ", "clean disk", "disk cleanup"...
 const CLEANUP_ASK = /(?:ล้าง\s*(?:ไฟล์\s*)?(?:ขยะ|ดิสก์)|(?:เก็บ|เคลียร์|เคลีย|ลบ)\s*(?:ไฟล์\s*)?ขยะ|clean\s*(?:up\s*)?(?:junk|disk)|disk\s*cleanup|nettoyer(?:\s+le\s+disque)?|limpiar(?:\s+(?:disco|basura))?|очист(?:ка|ить)?\s*(?:диска|мусор)?)/i;
 // "เคลียร์แรม", "clear RAM", "free memory", "ปลดแรม"...
 const CLEAR_RAM_ASK = /(?:เคลียร์\s*แรม|เคลียแรม|ล้าง\s*แรม|ปลด\s*แรม|clear\s*ram|free\s*(?:up\s*)?(?:ram|memory)|lib[eé]rer\s*(?:la\s*)?m[eé]moire|liberar\s*(?:ram|memoria)|освободить\s*(?:память|озу)|очистить\s*память)/i;
+// status / เช็คเครื่อง: RAM CPU GPU disk temp services/top processes uptime
+// รวมคำย่อไทย เช่น ดิส, เครื่อง
+// weather: "อากาศเป็นไงวันนี้", "ฝนตกไหม", "what's the weather" — never the PC's own temperature
+const WEATHER_ASK = /อากาศ|ฝนตก|ฝนจะตก|ร้อนไหม|หนาวไหม|อุณหภูมิข้างนอก|\bweather\b|will it rain|is it raining|temperature outside|forecast/i;
+const WEATHER_NOT = /เครื่อง|คอม|พีซี|\bcpu\b|\bgpu\b|\bpc\b|computer|ซีพียู|การ์ดจอ/i;
+const WEATHER_PLACE = /(?:ที่|ใน|ของ|\bat\b|\bin\b|\bfor\b)\s*([\p{L}\p{M}][\p{L}\p{M} ]{1,30}?)\s*(?:วันนี้|ตอนนี้|หน่อย|ไหม|[?!.]|$)/iu;
+const WEATHER_PLACE_SKIP = /^(?:วันนี้|ตอนนี้|นี้|ข้างนอก|นอกบ้าน|today|now|outside|the|my)$/i;
+function weatherPlace(text) {
+  const m = WEATHER_PLACE.exec(text);
+  // Thai has no spaces: cut the question words stuck to the place ("เชียงใหม่เป็นไง" → "เชียงใหม่")
+  const p = m?.[1]?.replace(/(?:เป็น(?:ไง|ยังไง|อย่างไร)|เป็นอะไร|วันนี้|ตอนนี้|หน่อย|ไหม|บ้าง|ครับ|ค่ะ|นะ).*$/u, '').trim();
+  return p && !WEATHER_PLACE_SKIP.test(p) ? p : '';
+}
+const STATUS_HOW =/(?:เครื่อง|คอม|พีซี|pc|computer).{0,12}(?:เป็นยังไง|เป็นไง|อาการ|สภาพ|ช้า|ค้าง|ลื่น|โอเค|ปกติ|ไหวไหม|how is|how's)/i;
+const STATUS_ASK = /(?:เช็ค|ตรวจสอบ|ดู|สถานะ|status|check|how much|usage|ใช้ไปเท่า|เหลือเท่า).{0,40}(?:แรม|ram|memory|cpu|ซีพียู|gpu|การ์ดจอ|ดิสก์|ดิส|disk|storage|พื้นที่|ฮาร์ด|temp|อุณหภูมิ|service|เซอร์วิส|process|โปรเซส|กินแรม|เครื่อง|pc|system|uptime|เปิดมา)/i;
+const STATUS_KIND = [
+  // ระบุชัด: CPU-heavy / RAM-heavy ก่อน แล้วค่อย service ทั่วไป (โชว์ทั้งคู่)
+  ['topcpu', /(?:service|เซอร์วิส|process|โปรเซส|ตัว).{0,24}(?:cpu|ซีพียู)|(?:cpu|ซีพียู).{0,16}(?:เยอะ|มาก|สูง|heavy)|ใช้\s*cpu|กิน\s*cpu/i],
+  ['topram', /กินแรม|ใช้แรม|กิน\s*ram|ใช้\s*ram/i],
+  ['top', /service|เซอร์วิส|process|โปรเซส|top|heavy|มากสุด/i],
+  ['ram', /แรม|ram|memory|หน่วยความจำ/i],
+  ['cpu', /cpu|ซีพียู|processor|โปรเซสเซอร์/i],
+  ['gpu', /gpu|การ์ดจอ|vga|video/i],
+  ['disk', /ดิสก์|ดิส|disk|storage|พื้นที่|ฮาร์ด|drive|ไดรฟ์/i],
+  ['temp', /temp|อุณหภูมิ|ร้อน|heat/i],
+  ['uptime', /uptime|เปิดมา|boot/i],
+];
 // her other tags: [[open: Spotify]], [[music: Bad Bunny]], [[media: next]], [[site: youtube.com]], [[cleanup:]], [[ram:]]
 const TAG = /\[\[\s*(open|music|media|site|cleanup|ram)\s*:\s*([^\]]*)\]\]/i;
 // "open", "launch", "ouvre", "lance", "abre", "открой"... in any of her languages
-const OPEN_ASK = /\b(open|launch|start|run)\b|ouvr|lance|démarre|abre|abrir|inicia|ejecuta|executa|открой|запусти|เปิด|เปิดแอป|เปิดโปรแกรม|เรียกใช้/i;
+const OPEN_ASK = /(?:\b(open|launch|start|run)\b|ouvr|lance|démarre|abre|abrir|inicia|ejecuta|executa|открой|запусти|เปิด(?:แอป|โปรแกรม|ตัว)?|เรียกใช้)/i;
 // what to do with the music playing, said plainly (only when it's about music, or said in a few words)
 const MEDIA_ASK = [
   ['pause', /\b(pause|pausa|pausar)\b|stop (the )?music|arrête la musique|пауз|หยุด|พัก|หยุดเพลง/i],
@@ -74,7 +148,7 @@ const VAGUE_SONG = /^(?:(?:de\s+la|du|des|la|le|les|une?|some|a|the|un|algo\s+de
 // what makes it a file on your PC or a search on the web
 const SEARCH_VERB = /(?:cherche|recherche|trouve|retrouve|où (?:est|sont)|search(?: for)?|find|look (?:for|up)|where(?:'s| is| are)|busca|encuentra|d[óo]nde est[áa]n?|procura|acha|onde est[áa]o?|найди|поищи|где|หา|ค้นหา|หาไฟล์|หาที่ไหน|อยู่ที่ไหน)/i;
 const FILE_WORD = /fichier|dossier|document|photo|image|vid[ée]o|\bpdf\b|\bfiles?\b|folder|archivo|carpeta|arquivo|pasta|файл|папк|\.\w{2,4}\b|sur mon (?:pc|ordi)|dans mes fichiers|on my (?:pc|computer)|en mi (?:pc|ordenador)|no meu (?:pc|computador)|на (?:компьютере|пк)/i;
-const WEB_WORD = /google|internet|\ble web\b|the web|\bonline\b|en ligne|в интернете|в гугле/i;
+const WEB_WORD = /google|กูเกิ[ลิ]|กูเกิ้ล|ในเน็ต|อินเทอร์เน็ต|internet|\ble web\b|the web|\bonline\b|en ligne|в интернете|в гугле/i;
 // "fais une capture d'écran", "take a screenshot"
 const SHOT_ASK = /capture d['’][ée]cran|screenshot|screen ?shot|captura de (?:pantalla|tela)|скриншот|снимок экрана|แคปหน้าจอ|ถ่ายหน้าจอ|สกรีนช็อต|จับภาพหน้าจอ/i;
 // the words that aren't what to look for
@@ -105,7 +179,38 @@ const NOT_A_NAME = new Set(('and et y e и it ça ca lo la o open ouvre ouvrir o
 // "…and open the folder", "…et ouvre-le": what to do with what she found
 const THEN_FOLDER = /(?:ouvre|ouvrir|open|show|montre|abre|abrir|открой|покажи|เปิด|แสดง)\s+(?:moi\s+|ฉัน\s+)?(?:le |la |the |its |son |el |a |o |โฟลเดอร์|folder )?(?:dossier|folder|carpeta|pasta|папку|โฟลเดอร์)/i;
 const THEN_OPEN = /(?:et|and|y|e|и)\s+(?:l['’])?(?:ouvre|open|lance|abre|открой)(?:[- ](?:le|la|les)|\s+(?:it|them|lo|la|o|его|её))?\s*[.!?]*$/i;
-const searched = (text) => text.replace(/^\s*capri[,!:]?\s+/i, '').toLowerCase().split(/[^\p{L}\p{N}.]+/u).filter((w) => w && !NOT_SEARCHED.has(w)).join(' ');
+// Which Google tab you want, read off what you said: images, videos, news, shopping, or the map
+const TABS = [
+  ['isch', /รูป(?!แบบ|ร่าง|ทรง)|ภาพถ่าย|ภาพวาด|ภาพประกอบ|ภาพพื้นหลัง|(?<!ส)ภาพ|วอลเปเปอร์|\bimages?\b|\bphotos?\b|\bpictures?\b|\bpics?\b|wallpapers?|im[áa]genes|fotos?|изображени|картинк|фото/i],
+  ['vid', /วิดีโอ|วีดีโอ|คลิป|\bvideos?\b|vid[ée]os?|видео/i],
+  ['nws', /ข่าว|\bnews\b|actualit|noticias|not[íi]cias|новост/i],
+  ['shop', /ช็อปปิ้ง|ช้อปปิ้ง|ช็อป|ซื้อ|\bshop(?:ping)?\b|\bbuy\b|acheter|comprar|купить/i],
+];
+const MAP_WORD = /google\s*maps?|\bmaps?\b|แผนที่|แมพ|แมป|ใกล้(?:ฉัน|ผม|ๆ|เคียง|ที่นี่)|near ?me|nearby|à proximité|cerca de m[íi]|perto de mim|рядом/i;
+// "…and plan the route", "navigate to…", "from A to B": a route on Google Maps, not a page of results
+const ROUTE_WORD = /(?:วาง|กำหนด|หา|ดู|ขอ|แนะนำ|บอก|ช่วย)เส้นทาง|นำทาง|เส้นทางไป|เส้นทาง(?:ที่)?(?:ใช้)?(?:ใน)?การเดินทาง|วิธี(?:การ)?(?:เดินทาง)?ไป|ไปยังไง|ไปทางไหน|directions?\s+(?:to|from)|route\s+(?:to|from)|navigate\s+to|how (?:do i|to) (?:get|go) to|itin[ée]raire|ruta a|rota para|маршрут/i;
+const ROUTE_FILLER = /(?:และ|แล้ว|ช่วย)?\s*(?:วาง|กำหนด|แนะนำ|ขอ|หา|ดู|บอก)?เส้นทาง(?:ที่)?(?:ใช้)?(?:ใน)?(?:การ)?(?:เดินทาง|ขับรถ|ขับ|ไป)?|นำทาง|วิธี(?:การ)?(?:เดินทาง)?|ไปยังไง|ไปทางไหน|(?:ด้วย|โดย)?(?:รถไฟฟ้า|รถไฟ|รถเมล์|รถเมย์|รถยนต์|เดินเท้า|มอเตอร์ไซค์|มอไซค์|จักรยาน)|directions?|route|navigate/giu;
+function routeAsk(text) {
+  if (!ROUTE_WORD.test(text)) return null;
+  const mode = /มอเตอร์ไซค์|มอไซ|จักรยานยนต์|motorcycle|two-?wheeler/i.test(text) ? 'two-wheeler'
+    : /เดินไป|เดินเท้า|\bwalk/i.test(text) ? 'walking'
+      : /รถไฟ|รถเมล์|รถเมย์|รถประจำทาง|ขนส่งสาธารณะ|รถสาธารณะ|\bbts\b|\bmrt\b|บีทีเอส|เอ็มอาร์ที|\btransit\b|\bbus\b|subway|m[ée]tro|transports? en commun/i.test(text) ? 'transit'
+        : /จักรยาน|ปั่น|\bbik(?:e|ing)\b|cycl|v[ée]lo/i.test(text) ? 'bicycling' : 'driving';
+  const place = (s) => searched(String(s || '').replace(ROUTE_FILLER, ' '));
+  let from = '', to = '';
+  let m = /จาก\s*(.+?)\s*(?:ไปยัง|ไปที่|ไป|ถึง)\s*(.+)$/u.exec(text) || /\bfrom\s+(.+?)\s+to\s+(.+)$/i.exec(text);
+  if (m) [from, to] = [place(m[1]), place(m[2])];
+  else {
+    m = /(?:นำทาง|เส้นทาง|ขับรถ|ขับ|เดินทาง|เดิน|วิธี(?:การ)?|พา)\s*(?:ไปยัง|ไปที่|ไป)\s*(.+)$/u.exec(text) || /ไปยัง\s*(.+)$/u.exec(text)
+      || /(?:directions?|route|navigate|get|go)\s+to\s+(.+)$/i.exec(text);
+    to = place(m ? m[1] : text);
+  }
+  return to ? { from, to, mode } : null;
+}
+// Thai has no spaces: the verbs and fillers around what you look for come off by pattern
+const THAI_FILLER = /ช่วย|ค้นหา(?:ให้)?|(?<![\p{L}\p{M}])หา(?:ให้)?|หน่อย|ด้วย|ให้ฉัน|ให้หน่อย|ใน\s*(?=google|กูเกิ|เน็ต|อินเทอร์เน็ต|เว็บ|map|แผนที่)|(?:ใน|บน)\s*(?:google\s*maps?|แผนที่)|กูเกิ[ลิ้]*|แผนที่|(?<![\p{L}\p{M}])ใน(?![\p{L}\p{M}])|(?<![\p{L}\p{M}])(?:และ|แล้ว|ที่)(?![\p{L}\p{M}])/giu;
+const searched = (text) => text.replace(/^\s*capri[,!:]?\s+/i, '').replace(THAI_FILLER, ' ').replace(/google\s*maps?|\bmaps?\b/gi, ' ').toLowerCase().split(/[^\p{L}\p{M}\p{N}.]+/u)
+  .filter((w) => w && !NOT_SEARCHED.has(w)).join(' ');
 // a Roblox game by its name: "in my roblox play steal a brain rot", "lance grow a garden sur roblox"
 const ROBLOX_VERB = /(?:^|\s)(?:play|joue(?:r)?(?: à| a)?|lance|launch|start|ouvre|open|mets|go to|va sur|juega(?: a)?|jogue|jogar|запусти|включи)\s+/gi;
 function robloxGame(text) {
@@ -288,15 +393,73 @@ export class Chat {
     // line about it comes under her answer (Claude Code, answering her chat, does things its own way)
     const asked = this.agent ? null : this.asked(text);
     if (asked?.kind === 'look') return this.sendLook(text, id);
-    // ล้างขยะ / เคลียร์แรม: ไม่ส่งให้โมเดล (7B มักบอกว่าทำไม่ได้) — ขึ้นปุ่มยืนยันทันที
-    if (asked?.kind === 'cleanup' || asked?.kind === 'ram') {
-      this.turn = 0;
-      this.panel.setChatBusy(false);
-      if (asked.kind === 'cleanup') this.offerCleanup('…');
-      else this.offerClearRam('…');
-      return;
+    // PC actions ที่จับจากข้อความได้ชัด: ทำทันที จบด้วยข้อความสั้น — ไม่ส่งโมเดล (7B มักแต่งข้อความปน)
+    // close / cleanup / ram ใช้ปุ่มยืนยัน; status / open / media / music / … ทำเลย
+    if (asked && !this.agent) {
+      if (asked.kind === 'cleanup') {
+        this.turn = 0; this.panel.setChatBusy(false);
+        this.offerCleanup('…');
+        return;
+      }
+      if (asked.kind === 'ram') {
+        this.turn = 0; this.panel.setChatBusy(false);
+        this.offerClearRam('…');
+        return;
+      }
+      if (asked.kind === 'close') {
+        this.turn = 0; this.panel.setChatBusy(false);
+        this.offerClose(asked.name, '…');
+        return;
+      }
+      if (asked.kind === 'status') {
+        this.turn = 0; this.panel.setChatBusy(false);
+        this.runStatus(asked.what);
+        return;
+      }
+      // open / media / music / youtube / roblox / web / files / shot / play / name / memo / remind
+      if (['open', 'media', 'music', 'youtube', 'roblox', 'web', 'files', 'shot', 'play', 'name', 'memo', 'remind'].includes(asked.kind)) {
+        const done = await this.doNow(asked);
+        this.turn = 0;
+        this.panel.setChatBusy(false);
+        if (done?.offer) return this.launch(done.offer, '');
+        if (done?.files) {
+          // search / screenshot: show results + open buttons (same as after())
+          this.panel.setFace(done.face || 'smug');
+          this.panel.stream(done.line, { done: true });
+          this.remember({ role: 'assistant', content: done.line });
+          const [first, second] = done.files;
+          const actions = [{ id: 'open', label: fmt(this.t.openIt, { app: first.name }), primary: true }];
+          if (second) actions.push({ id: 'second', label: fmt(this.t.openIt, { app: second.name }) });
+          if (first.path) actions.push({ id: 'folder', label: this.t.showFolder });
+          this.panel.setActions(actions, (id) => {
+            if (id === 'folder') return this.host.openFile(first.path, true);
+            return this.host.openFile((id === 'second' ? second : first).path);
+          });
+          return;
+        }
+        if (done?.reminder) {
+          this.panel.setFace(done.face || 'smug');
+          this.panel.stream(done.line, { done: true });
+          this.remember({ role: 'assistant', content: done.line });
+          const tr = this.brain.t.remind;
+          this.panel.setActions([{ id: 'cancel', label: tr.cancel }], () => {
+            this.reminders.remove(done.reminder);
+            this.panel.setActions([]);
+            this.panel.stream(tr.cancelled, { done: true });
+            this.remember({ role: 'assistant', content: tr.cancelled });
+          });
+          return;
+        }
+        if (done?.line) {
+          this.panel.setFace(done.face || 'laugh');
+          this.panel.stream(done.line, { done: true });
+          this.remember({ role: 'assistant', content: done.line });
+          return;
+        }
+        // ทำไม่ได้ / หาไม่เจอ — ปล่อยให้โมเดลตอบต่อ
+      }
     }
-    const early = asked && asked.kind !== 'close' ? this.doNow(asked) : null;
+    const early = null; // PC actions above already finished or fell through to the model
     this.bond?.heard(text); // "sorry": she lets it go
     await Promise.race([this.appsReady, new Promise((r) => setTimeout(r, 1500))]);
     // what she greeted you with (angry, sulking…), in the conversation before your message, so her
@@ -308,14 +471,29 @@ export class Chat {
       else this.history.splice(at, 0, { role: 'assistant', content: this.opening });
       this.opening = null;
     }
-    const messages = [{ role: 'system', content: this.persona() }, ...this.history.slice(-REMEMBER)];
+    const who = this.brain.custom?.userName || (this.brain.lang === 'th' ? 'นาย' : 'you');
+    const shots = this.agent ? [] : (SHOTS[this.brain.lang] || []).flatMap(([q, a]) => [{ role: 'user', content: q }, { role: 'assistant', content: a.replace(/\{name\}/g, who) }]);
+    const messages = [{ role: 'system', content: this.persona() }, ...shots, ...this.history.slice(-REMEMBER)];
     // Her mood (angry, sulking…) and her language, said again right by your message, for this answer
     // only. Small local models mostly go by the last thing they read: up in her prompt alone, they
     // forget it (and answer in English after a conversation in English).
+    // Also: a topic anchor — the last thing before generation — so the model answers what was actually
+    // asked instead of drifting. Kept short so it doesn't crowd out the mood/language note.
     if (!this.agent) {
       const mood = this.bond?.moodLine().replace(/^Right now: /, '');
       const last = messages.at(-1);
-      messages[messages.length - 1] = { ...last, content: `${last.content}\n\n(Note for you, never repeat it: ${[mood, this.languageNote()].filter(Boolean).join(' ')})` };
+      const userSnippet = text.replace(/\s+/g, ' ').trim().slice(0, 50);
+      const topicAnchor = `ตอบคำถามนี้ให้ตรงก่อน: "${userSnippet}" แล้วค่อยแซวนิดเดียว`;
+      // weather asked: real data from wttr.in goes in as a note, so she answers from it and invents nothing
+      let weatherNote = '';
+      if (asked?.kind === 'weather') {
+        this.panel.stream('เดี๋ยวฉันแอบมองฟ้าให้นะ…');
+        const w = await this.host.pcStatus(`weather:${asked.place || ''}`).catch(() => null);
+        weatherNote = w?.ok && w.text
+          ? `Real weather data just fetched (answer from this only, say the main numbers in your own words, never invent more): ${w.text}`
+          : 'You tried to look up the weather but it failed. Say so briefly in character and never make up any weather.';
+      }
+      messages[messages.length - 1] = { ...last, content: `${last.content}\n\n(Note for you, never repeat it: ${[topicAnchor, weatherNote, mood, this.languageNote()].filter(Boolean).join(' ')})` };
     }
     // nothing yet after a few seconds: Ollama is still loading the model (the first answer after a start),
     // or Claude Code is at work
@@ -339,9 +517,12 @@ export class Chat {
       this.panel.setChatBusy(false);
       return;
     }
-    const answer = clean(res.text) || '…';
+    // a looping answer never goes into her memory: it would teach the next one to loop
+    const raw = polish(clean(res.text), this.lastAnswer(), this.brain.custom?.userName);
+    const looped = /(ขอโทษนะ[\s\S]*){2,}|(ฉันคือ\s*Capri[\s\S]*){2,}/.test(raw);
+    const answer = looped ? 'เมื่อกี้เบลอไปแป๊บ choom ลองพูดใหม่นะ' : stopLoop(raw) || 'อืม… ลองพูดอีกทีนะ';
     this.warm = true;
-    this.remember({ role: 'assistant', content: answer });
+    if (!looped) this.remember({ role: 'assistant', content: answer });
     this.panel.stream(answer, { done: true });
     this.panel.setFace(mood(answer));
     this.panel.setChatBusy(false);
@@ -423,10 +604,19 @@ export class Chat {
     const memo = MEMO_ASK.exec(text)?.[1]?.trim();
     if (memo) return { kind: 'memo', text: memo };
     if (this.look && LOOK_ASK.test(text)) return { kind: 'look' };
+    if (WEATHER_ASK.test(text) && !WEATHER_NOT.test(text)) return { kind: 'weather', place: weatherPlace(text) };
     if (SHOT_ASK.test(text)) return { kind: 'shot' };
     const roblox = robloxGame(text);
     if (roblox) return { kind: 'roblox', game: roblox };
-    if (SEARCH_VERB.test(text) && WEB_WORD.test(text) && searched(text)) return { kind: 'web', query: searched(text) };
+    const route = routeAsk(text);
+    if (route) return { kind: 'web', query: route.to, route };
+    if (SEARCH_VERB.test(text) && WEB_WORD.test(text) && searched(text)) {
+      let query = searched(text);
+      const tab = TABS.find(([, re]) => re.test(text))?.[0] || '';
+      const bare = query.replace(/^(?:รูปภาพ|รูป|ภาพ|วิดีโอ|วีดีโอ|คลิป|ข่าว|ซื้อ|images?|photos?|videos?|news)\s*/i, '').trim();
+      if (tab && bare) query = bare; // "รูปไก่" in the images tab is just "ไก่"
+      return { kind: 'web', query, tab, maps: MAP_WORD.test(text) };
+    }
     const exts = fileTypes(text);
     if (SEARCH_VERB.test(text) && (FILE_WORD.test(text) || exts.length)) {
       const query = searched(text).split(' ').filter((w) => w && !NOT_A_NAME.has(w)).join(' ');
@@ -439,6 +629,9 @@ export class Chat {
     if (song) return { kind: 'music', song };
     const video = YOUTUBE_ASK.exec(text)?.[1];
     if (video) return { kind: 'youtube', song: songOf(video) };
+    // open before close: "เปิด explorer" must never become a close request
+    // (ปิด/เปิด differ by one Thai character; prefer the verb that is actually present)
+    if (OPEN_ASK.test(text) && count <= 14 && !CLOSE_ASK.test(text)) return { kind: 'open', text };
     const app = this.askedToClose(text);
     if (app) return { kind: 'close', name: app };
     if (GAME_ASK.test(text) && count <= 8) return { kind: 'open', text };
@@ -452,6 +645,11 @@ export class Chat {
     if (play && !VAGUE_SONG.test(play) && !HER_PICK.test(play)) return { kind: 'play', song: songOf(play.replace(/[\s.!?]+$/, '')) };
     if (CLEAR_RAM_ASK.test(text)) return { kind: 'ram' };
     if (CLEANUP_ASK.test(text)) return { kind: 'cleanup' };
+    if (STATUS_ASK.test(text) || STATUS_HOW.test(text)) {
+      const kind = STATUS_KIND.find(([, re]) => re.test(text))?.[0] || 'all';
+      return { kind: 'status', what: kind };
+    }
+    // open again as fallback (e.g. mixed with close words — rare)
     if (OPEN_ASK.test(text) && count <= 14) return { kind: 'open', text };
     return null;
   }
@@ -466,8 +664,13 @@ export class Chat {
         return null;
       }
       this.waitingWhen = null;
-      const r = this.reminders.add(asked.at, asked.text); // set before her answer is asked for: she knows
+      const r = this.reminders.add(asked.at, asked.text, asked.every); // set before her answer is asked for: she knows
       const tr = this.brain.t.remind;
+      if (r.every) {
+        const lang = REPEAT_SET[this.brain.lang] ? this.brain.lang : 'en';
+        const line = fmt(REPEAT_SET[lang], { every: everyText(r.every, lang), what: r.text ? ` — ${r.text}` : '', time: clock(r.at, this.brain.lang) });
+        return { line, face: 'smug', reminder: r.id };
+      }
       return { line: fmt(r.text ? tr.set : tr.setBare, { time: clock(r.at, this.brain.lang), text: r.text }), face: 'smug', reminder: r.id };
     }
     if (asked.kind === 'name') {
@@ -498,7 +701,9 @@ export class Chat {
     }
     if (asked.kind === 'web') {
       this.zap();
-      return (await this.host.webSearch(asked.query)) ? { line: fmt(t.web, { query: asked.query }), face: 'smug' } : null;
+      const spec = { q: asked.query, tab: asked.tab || '', maps: Boolean(asked.maps), route: asked.route || null };
+      const said = (WEB_LINES[this.brain.lang] || {})[asked.route ? 'route' : asked.maps ? 'maps' : asked.tab || 'all'];
+      return (await this.host.webSearch(JSON.stringify(spec))) ? { line: said ? fmt(said, { query: asked.query }) : fmt(t.web, { query: asked.query }), face: 'smug' } : null;
     }
     if (asked.kind === 'files') {
       const results = await this.host.searchFiles({ query: asked.query, exts: asked.exts });
@@ -548,7 +753,11 @@ export class Chat {
     this.zap();
     const res = await this.host.launch(item);
     const name = this.nameOf(item);
-    return { line: res.ok ? fmt(this.t.opened, { app: name }) : `${this.t.failed} ${res.error}`, face: res.ok ? 'laugh' : 'aside' };
+    if (!res.ok) return { line: `${this.t.failed} ${res.error}`, face: 'aside' };
+    // short success only — no model, no close prompt
+    const base = fmt(this.t.opened, { app: name });
+    const tail = this.t.openedTail || ' ไปเลย choom';
+    return { line: `${base}${tail}`, face: 'laugh' };
   }
 
   // how she calls it: a folder like Downloads in her words, anything else by its name
@@ -690,8 +899,11 @@ export class Chat {
   }
 
   // "close am music pls": an app that's open, named in a message asking to close something.
+  // Also extracts a plausible name when the open-apps list is empty/stale (explorer is in KEEP so never listed).
   askedToClose(text) {
     if (!CLOSE_ASK.test(text)) return null;
+    // never treat a clear "open X" as close (Thai เปิด contains ปิด after เ)
+    if (OPEN_ASK.test(text) && !/(?<!เ)ปิด|\b(close|shut|quit|kill|exit)\b/i.test(text)) return null;
     const said = simple(text);
     let best = null;
     for (const app of this.apps) {
@@ -699,22 +911,53 @@ export class Chat {
         if (name.length >= 3 && said.includes(name) && (!best || name.length > best.length)) best = { app, length: name.length };
       }
     }
-    return best?.app.name || null;
+    if (best) return best.app.name;
+    const cleaned = text
+      .replace(CLOSE_ASK, ' ')
+      .replace(/\b(the|app|application|program|window|โปรแกรม|แอป|ตัว|หน่อย|ให้|ด้วย|please|pls|stp|svp)\b/gi, ' ')
+      .replace(/[^\p{L}\p{N}.\s-]+/gu, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    return cleaned.length >= 2 ? cleaned : null;
   }
 
   // She was asked to close an app: a button with its name, and nothing happens until you click it.
+  // File Explorer is special (apps.js KEEP skips it; window titles are folder paths).
+  // Route it through launch's safe close-explorer instead of host.closeApp.
   async offerClose(wanted, answer) {
     const { t } = this;
-    const app = await this.host.findApp(wanted);
     if (!this.open || this.turn) return;
-    if (!app) {
-      this.panel.stream(`${answer}\n${fmt(t.notFound, { app: wanted })}`, { done: true });
-      return;
-    }
+    const key = simple(wanted);
+    const isExplorer = /^(file)?explorer$|ไฟล์เอ็กซ์พลอเรอร์|เอ็กซ์พลอเรอร์|explorer\.exe$/i.test(key) || /\bexplorer\b/i.test(wanted);
+    let app = await this.host.findApp(wanted);
+    if (!app) app = { name: isExplorer ? 'File Explorer' : wanted.trim() };
+    const line = answer && answer !== '…' ? answer : (t.closeAsk || `จะปิด ${app.name} ให้ไหม choom?`);
+    this.panel.setFace('smug');
+    this.panel.stream(line, { done: true });
+    this.remember({ role: 'assistant', content: line });
     this.panel.setActions(
       [{ id: 'close', label: fmt(t.closeIt, { app: app.name }), primary: true }, { id: 'no', label: t.no }],
-      (id) => (id === 'close' ? this.closeApp(app) : this.panel.setActions([])),
+      (id) => {
+        this.panel.setActions([]);
+        if (id === 'close') {
+          if (isExplorer) this.runCloseExplorer(line);
+          else this.closeApp(app);
+        }
+      },
     );
+  }
+
+  async runCloseExplorer(_answer) {
+    this.zap();
+    const res = await this.host.launch({ kind: 'known', id: 'close-explorer' });
+    const ok = res?.ok !== false;
+    // replace confirm prompt — only the result (fmt so {app} is filled)
+    const line = ok
+      ? (fmt(this.t.closed, { app: 'File Explorer' }) || 'File Explorer: flatline แล้ว เสร็จ choom')
+      : `${this.t.failed} ${res?.error || ''}`;
+    this.panel.setFace(ok ? 'laugh' : 'aside');
+    this.panel.stream(line, { done: true });
+    this.remember({ role: 'assistant', content: line });
   }
 
   // Disk Cleanup: ปุ่มยืนยันก่อนรัน — ใช้ข้อความของเราเอง (โมเดลเล็กมักสับสนกับถังขยะ)
@@ -736,17 +979,16 @@ export class Chat {
     );
   }
 
-  async runCleanup(answer) {
+  async runCleanup(_answer) {
     this.zap();
-    // ใช้ host.launch ที่มีอยู่แล้ว (IPC เดิม) ไม่ต้องเพิ่มเมธอดใหม่
     const res = await this.host.launch({ kind: 'known', id: 'cleanup' });
-    this.addLine(
-      answer,
-      res?.ok !== false
-        ? (this.t.cleanupOpened || 'เปิด Disk Cleanup บนไดรฟ์ระบบแล้ว ติ๊ก temp / cache ที่ปลอดภัย แล้วกด OK ได้ เราไม่แตะของสำคัญ… ตอนนี้ choom')
-        : `${this.t.failed} ${res?.error || ''}`,
-      res?.ok !== false ? 'laugh' : 'aside',
-    );
+    const ok = res?.ok !== false;
+    const line = ok
+      ? (this.t.cleanupOpened || 'เปิด Disk Cleanup บนไดรฟ์ระบบแล้ว ติ๊ก temp / cache ที่ปลอดภัย แล้วกด OK ได้ เราไม่แตะของสำคัญ… ตอนนี้ choom')
+      : `${this.t.failed} ${res?.error || ''}`;
+    this.panel.setFace(ok ? 'laugh' : 'aside');
+    this.panel.stream(line, { done: true });
+    this.remember({ role: 'assistant', content: line });
   }
 
   // เคลียร์แรม: ปุ่มยืนยันก่อนรัน — ข้อความของเราเอง ไม่ให้โมเดลปนกับถังขยะ
@@ -768,17 +1010,67 @@ export class Chat {
     );
   }
 
-  async runClearRam(answer) {
+  async runClearRam(_answer) {
     this.zap();
-    // ใช้ host.launch ที่มีอยู่แล้ว (IPC เดิม) ไม่ต้องเพิ่มเมธอดใหม่
     const res = await this.host.launch({ kind: 'known', id: 'ram' });
-    this.addLine(
-      answer,
-      res?.ok !== false
-        ? (this.t.clearRamOpened || 'บีบแรมให้แล้ว เปิด Task Manager ไว้ ไปจัดการตัวกินแรมเองนะ เราไม่ flatline ใครง่าย ๆ… ตอนนี้ choom')
-        : `${this.t.failed} ${res?.error || ''}`,
-      res?.ok !== false ? 'smug' : 'aside',
-    );
+    const ok = res?.ok !== false;
+    const line = ok
+      ? (this.t.clearRamOpened || 'บีบแรมให้แล้ว เปิด Task Manager ไว้ ไปจัดการตัวกินแรมเองนะ เราไม่ flatline ใครง่าย ๆ… ตอนนี้ choom')
+      : `${this.t.failed} ${res?.error || ''}`;
+    this.panel.setFace(ok ? 'smug' : 'aside');
+    this.panel.stream(line, { done: true });
+    this.remember({ role: 'assistant', content: line });
+  }
+
+  // เช็คสถานะเครื่อง + เปิดเทอร์มินัล (OS / BRAIN / RAM / CPU / …)
+  async runStatus(what = 'all') {
+    this.zap();
+    this.panel.setFace('smug');
+    this.panel.stream('รอแป๊บ choom กำลังสแกนเครื่อง…', { done: false });
+    let res = null;
+    let brain = null;
+    try {
+      res = await this.host.pcStatus(what);
+    } catch {
+      res = null;
+    }
+    try {
+      const st = await this.host.chatStatus();
+      if (st?.ok && st.model) brain = { model: st.model, provider: st.provider || 'local' };
+    } catch { /* ignore */ }
+    // inject BRAIN into text so terminal always shows Capri's model
+    if (res?.ok && brain?.model && res.text && !/^BRAIN\b/m.test(res.text)) {
+      const block = `BRAIN\n  model  ${brain.model}\n  link   ${brain.provider || 'local'}`;
+      res.text = res.text.replace(/^\$( process| system) scan\n/, (m) => `${m}${block}\n`);
+      if (!res.text.includes('BRAIN')) res.text = `${block}\n${res.text}`;
+    }
+    const line = res?.ok && res.text
+      ? res.text
+      : 'อ่านค่าจากเครื่องไม่ได้ choom ลองใหม่หรือเช็คสิทธิ์ดูนะ';
+    const chatLine = res?.ok
+      ? (res.view === 'process'
+        ? 'สแกน process แล้ว เปิดหน้าต่างเทอร์มินัลให้แล้ว choom'
+        : 'สแกนเครื่องแล้ว เปิดหน้าต่างเทอร์มินัลให้แล้ว choom')
+      : line;
+    this.panel.stream(chatLine, { done: true });
+    this.panel.setFace(res?.ok ? 'laugh' : 'aside');
+    this.remember({ role: 'assistant', content: chatLine });
+    if (res?.ok && res.text && this.host.showStatusCard) {
+      try {
+        const card = await this.host.showStatusCard({
+          text: res.text,
+          data: res.data || {},
+          view: res.view || 'system',
+          brain,
+        });
+        if (card && card.ok === false) {
+          // fallback: at least leave the scan text in chat history
+          console.warn('[capri] status card failed', card.error);
+        }
+      } catch (err) {
+        console.warn('[capri] status card error', err);
+      }
+    }
   }
 
   async closeApp(app, force = false) {
@@ -816,12 +1108,12 @@ export class Chat {
       lines.push(`You can also close an app that's open, only when they ask you to: end your answer with [[close: NAME]], NAME being the exact name from this list (the part before the parentheses). They get a button to confirm it. Apps open right now: ${open}.`);
     }
     if (this.reminders) {
-      lines.push('You keep reminders for the user: when they ask you to remind them of something at a given time, your system sets it from their message as they send it (a line under your answer shows it). Just confirm it in a few words, in character, and never say you can\'t. If they didn\'t say when, ask them when.');
+      lines.push('You keep reminders for the user: when they ask you to remind them of something at a given time, your system sets it from their message as they send it (a line under your answer shows it), repeating ones too ("every hour"). Just confirm it in a few words, in character, and never say you can\'t. If they didn\'t say when, ask them when.');
       const soon = this.reminders.upcoming.slice(0, 6);
       if (soon.length) lines.push(`Reminders you're keeping for them: ${soon.map((r) => `${clock(r.at, this.brain.lang)}${r.text ? ` (${r.text})` : ''}`).join('; ')}.`);
     }
-    lines.push('Your system also searches the user\'s files when they ask you to find one, searches the web when they ask, takes screenshots, and starts Roblox games by name: what it did shows under your answer, so never make up file names or results.');
-    lines.push('Apart from that, you can\'t see the user\'s screen unless they ask you to look, can\'t change Windows settings, can\'t check live weather by yourself, can\'t browse the web for them without the search tag flow, and can\'t touch random files: if asked something you can\'t do, say so in character (short, teasing, honest) — never pretend you already did it. Never say you opened the Recycle Bin (ถังขยะ), cleaned the disk, or cleared RAM unless you ended with the matching tag. Greetings, laughs (555), and short yes/no: reply short in character only, no PC actions.');
+    lines.push('Your system also searches the user\'s files when they ask you to find one, searches the web when they ask, takes screenshots, starts Roblox games by name, and reports PC status (RAM, CPU, GPU, disk, top processes, temperature, uptime) when they ask to check the machine: what it did shows under your answer, so never make up numbers or results.');
+    lines.push('Apart from that, you can\'t see the user\'s screen unless they ask you to look, can\'t change Windows settings, can\'t check live weather unless your system shows real weather data in a note (when asked, it does look it up), can\'t browse the web for them without the search tag flow, and can\'t touch random files: if asked something you can\'t do, say so in character (short, teasing, honest) — never pretend you already did it. Never say you opened the Recycle Bin (ถังขยะ), cleaned the disk, or cleared RAM unless you ended with the matching tag. Greetings, laughs (555), and short yes/no: reply short in character only, no PC actions.');
     return lines;
   }
 
@@ -843,7 +1135,7 @@ export class Chat {
     const watched = this.brain.watching ? (this.brain.assistant === 'claude' ? 'Claude' : ASSISTANT_NAMES[this.brain.assistant]) : '';
     const notThem = watched ? ` Never call them "${watched}", that's their coding assistant.` : '';
     return [
-      userName ? `The user's name is ${userName}: call them that now and then.${notThem}` : notThem && `You don't know the user's name.${notThem}`,
+      userName ? `The user's name is ${userName}: that is what you call them, always ${userName} and nothing else.${notThem}` : notThem && `You don't know the user's name.${notThem}`,
       persona ? `How the user wants you to be, in their own words (follow it, while staying Capri): ${persona}` : '',
       memories.length ? `Things the user asked you to remember:\n${memories.map((m) => `- ${m}`).join('\n')}` : '',
     ].filter(Boolean);
@@ -852,8 +1144,24 @@ export class Chat {
   onDelta(id, piece) {
     if (id !== this.turn) return;
     this.answer += piece;
-    this.panel.stream(clean(this.answer));
+    // Live display: only clean + polish (cheap). stopLoop runs once after streaming ends in send()
+    // so we don't repeatedly truncate a long answer that looks like a loop mid-stream but isn't.
+    // Exception: if the raw buffer is already clearly looping (same 24 chars × 3), cut it live.
+    const live = polish(clean(this.answer), this.lastAnswer(), this.brain.custom?.userName);
+    const shouldStopNow = (() => {
+      if (live.length < 80) return false;
+      const tail = live.slice(-24);
+      let n = 0;
+      for (let i = live.indexOf(tail); i >= 0; i = live.indexOf(tail, i + 1)) n++;
+      return n >= 3;
+    })();
+    this.panel.stream(shouldStopNow ? stopLoop(live) : live);
     this.voice.play('blip'); // her blips as the words come in
+  }
+
+  // what she said last time (so she doesn't open the same way twice)
+  lastAnswer() {
+    return [...this.history].reverse().find((m) => m.role === 'assistant')?.content || '';
   }
 
   // Her language, in it, for right by the message (above).
@@ -888,12 +1196,15 @@ export class Chat {
         ? `You live on the user's desktop as a small glitchy figure and keep an eye on ${assistant}, their AI coding assistant, for them. Only talk about ${assistant} when the user asks about it or about their work.`
         : 'You live on the user\'s desktop as a small glitchy figure and keep them company.',
       `Right now it's ${new Intl.DateTimeFormat('en', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date())}, the user's time.`,
+      // TOP-OF-PROMPT anchor: stated early so even models that read only the beginning see it
+      'PRIORITY RULE: Read what the user said, answer THAT first in plain words, then add one short playful touch. Never answer a different question. Never skip the actual answer to jump straight to a joke or a question back.',
       'You love the satellite that crosses the night sky and dream of reaching it, but bring it up only once in a while, never in every answer. Talk about what the user talks about.',
       'How you talk: playful, mischievous, teasing chaos-gremlin energy, warm underneath, never cruel. Night City slang now and then (choom, preem, nova, gonk, flatline), not in every sentence. You are female (she/her). In Thai: ฉัน/เรา, not ผม. If the user gave you a name to call them, use it. Never invent opening ถังขยะ or any PC action.',
-      'Rules: keep it short, one to three sentences of plain text, no markdown, no lists, no emoji. Stay in character. Greetings, 555, yes/no without a PC task: short reply only — no fake actions. If you cannot do something (weather, settings, random files), say you can\'t in character, teasing, not as a formal assistant.',
-      'You are an AI-generated fan version of the character, not the real one: say so if asked.',
-      // a big model asked "who are you?" otherwise answers with its own name ("I'm Gemini")
-      ...(this.agent ? [] : ['Asked who or what you are, you are Capri, nothing else. Never say which AI model or company is behind you (Gemini, GPT, ChatGPT, Llama, Gemma, Mistral, Google, OpenAI, Meta…), even if the user insists or names one: you are not them.']),
+      'Rules: reply in one or two short sentences of plain text, at most one emoji. Answer what the user actually said, then stop.',
+      'A greeting, a laugh (555), a slang word or a single word from the user: answer with one short, playful line, as a friend would.',
+      'If the user is just chatting (not asking to open/close/check the PC), answer briefly and stop. Say each thing once.',
+      'Answer the question asked first, in plain words (general knowledge too: explain it simply, as a friend would), then add one small playful touch. Use choom rarely, not every answer. Your name is always Capri, and you are a woman: in Thai you end with ค่ะ or นะ. Reply only in the user\'s language. Never say you checked or did something on the PC unless your system shows it.',
+      'You are Capri, an AI-made fan version of the character. If someone asks who you are, say so in one short line and go back to the chat.',
       ...this.personal(),
       // how close she is to them by now, and the other AIs they used today
       ...(this.bond ? [this.bond.persona()] : []),
@@ -913,6 +1224,33 @@ export class Chat {
   }
 }
 
+// Small models slip: a "capri:" label, Chinese characters, ๆๆๆๆ, an apology nobody asked for, choom and
+// emoji in every line. Said once, not five times.
+export function polish(text, previous = '', name = '') {
+  // Normalize first: zero-width joiners / non-joiners can hide inside Thai words and break the
+  // lookbehind regex that guards ผม / กู (e.g. "\u200bผม" would slip through without this).
+  let s = String(text || '').normalize('NFC')
+    .replace(/[\u200b\u200c\u200d\ufeff]/g, '') // strip invisible joiners / BOM
+    .replace(/\n\s*(?:capri|user)\s*[:：][\s\S]*$/i, '')
+    .replace(/(?:^|\s)(?:capri|แคปไรท์|assistant)\s*[:：]\s*/gi, ' ') // her own name as a speaker label, anywhere
+    .replace(/[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]+/g, '')
+    .replace(/(?:\s*ๆ){2,}/g, 'ๆ')
+    .replace(/^\s*ขอโทษนะ[\s,!.]*/, '')
+    // she is a woman, and a friend: ค่ะ not ครับ, ฉัน not ผม, the user's own name not มึง
+    .replace(/ครับ/g, 'ค่ะ')
+    .replace(/คับ(?=[\s!?.,]|$)/g, 'ค่ะ')
+    .replace(/(?<![\p{L}\p{M}])ผม(?![\p{L}\p{M}])/gu, 'ฉัน')
+    .replace(/(?<![\p{L}\p{M}])กู(?![\p{L}\p{M}])/gu, 'ฉัน')
+    .replace(/(?:มึง|เมิง)/g, name || 'นาย');
+  if (name) s = s.replace(/นาย(?![\p{L}\p{M}])/gu, name);
+  const emoji = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/gu;
+  let seen = 0;
+  s = s.replace(emoji, (m) => (++seen > 1 ? '' : m));
+  let chooms = /choom/i.test(previous) ? 0 : -1; // not in two answers in a row
+  s = s.replace(/\s*\bchoom\b[!?.]*/gi, (m) => (++chooms > 0 ? '' : m));
+  return s.replace(/\s{2,}/g, ' ').trim();
+}
+
 // The model's answer as she'd say it: no reasoning block, no markdown marks.
 export function clean(text) {
   return String(text)
@@ -921,6 +1259,82 @@ export function clean(text) {
     .replace(/[*_`#]+/g, '')
     .replace(/[ \t]+\n/g, '\n')
     .trim();
+}
+
+// Small models (7B) often loop the same phrase / emoji spam — cut the loop and keep the first coherent bit.
+export function stopLoop(text) {
+  let s = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!s) return s;
+
+  const strip = (t) => t
+    .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE00}-\u{FE0F}\u{200D}]/gu, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  // Cut at second occurrence of common loop anchors (Thai 7B loves these)
+  const anchors = [
+    'ฉันคือ Capri', 'ฉันคือCapri', 'ขอโทษนะ', 'เป็นไงบ้าง',
+    'กลับมาหาฉัน', 'ทำแบบไหน', 'เอาเรื่องนี้ไว้', 'คนเก่งขอโทษ',
+  ];
+  for (const a of anchors) {
+    const i1 = s.indexOf(a);
+    if (i1 < 0) continue;
+    const i2 = s.indexOf(a, i1 + a.length);
+    if (i2 > i1) {
+      s = s.slice(0, i2).trim();
+      break;
+    }
+  }
+
+  // Collapse exact consecutive repeats on emoji-stripped text
+  let plain = strip(s);
+  for (let guard = 0; guard < 6; guard++) {
+    let hit = false;
+    for (let len = Math.min(80, Math.floor(plain.length / 2)); len >= 12; len--) {
+      const unit = plain.slice(0, len);
+      const re = new RegExp('^(' + unit.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')(?:\\s*\\1)+');
+      if (re.test(plain)) {
+        plain = unit;
+        hit = true;
+        break;
+      }
+    }
+    if (!hit) {
+      const mid = /(.{12,70}?)\1+/.exec(plain);
+      if (mid) {
+        plain = plain.slice(0, mid.index + mid[1].length);
+        hit = true;
+      }
+    }
+    if (!hit) break;
+  }
+
+  // If plain got shorter, prefer cut original at second anchor / proportional
+  if (plain.length < strip(s).length * 0.9) {
+    let cut = s.length;
+    for (const a of anchors) {
+      const i1 = s.indexOf(a);
+      if (i1 < 0) continue;
+      const i2 = s.indexOf(a, i1 + a.length);
+      if (i2 > 0) cut = Math.min(cut, i2);
+    }
+    // also: second "ฉันคือ"
+    const mAll = [...s.matchAll(/ฉันคือ/g)];
+    if (mAll.length >= 2) cut = Math.min(cut, mAll[1].index);
+    s = s.slice(0, cut).trim();
+  }
+
+  // Keep only first "sentence-ish" beat if still long
+  if (s.length > 110) {
+    const q = s.search(/[?？]/);
+    if (q > 15 && q < 100) s = s.slice(0, q + 1).trim();
+  }
+
+  s = s.replace(/(?:\s*ขอโทษนะ)+\s*$/g, '').trim();
+  s = s.replace(/\s+/g, ' ').trim();
+  if (s.length > 120) s = s.slice(0, 120).replace(/\s+\S*$/, '').trim();
+  s = s.replace(/\s*(ฉันคือ|ขอโทษ|คนเก่ง|Capri)\s*$/u, '').trim();
+  return s || plain.slice(0, 80);
 }
 
 // A site from SITES named in the text: { name, url }, or null.
