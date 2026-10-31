@@ -1,5 +1,8 @@
-// What Capri says. She's a personality construct — dozens of minds in one — so she
-// sometimes talks as "we". Slang is Night City's: choom, preem, nova, flatline.
+// What Capri says. She is a high-end Arasaka Personality Construct — hundreds of elite
+// netrunner minds digitized and fused into one beautiful gestalt. Friendly yet dark,
+// playful and teasing, she slowly claims the host. She sometimes talks as "we".
+// Slang is Night City's: choom, preem, nova, flatline. Signature lines live in hello /
+// idle / chat.hello for en & th.
 
 export const LINES = {
   fr: {
@@ -369,10 +372,10 @@ export const LINES = {
   en: {
     state: { work: 'RUNNING', done: 'DONE', alert: 'WAITING', error: 'ERROR', info: 'SYNC', idle: 'IDLE', remind: 'REMINDER' },
     hello: [
-      'Link established. Hey, choom.',
-      'Capricorn construct online. What are we building?',
-      'All of me is awake. Watching {project}.',
-      'Biochip warm. I’m here.',
+      'Look out, choom! Ah-ah… been staring at me, haven’t you?',
+      'Capricorn construct online. Arasaka’s finest gestalt, at your service. What are we building?',
+      'All of me is awake. Hundreds of netrunner minds, one beautiful me. Watching {project}.',
+      'Biochip warm. I’m here — pure digital perfection, ready to play.',
     ],
     resume: ['Back on {project}. I didn’t forget a thing.', 'Session resumed. Picking up where we left off.'],
     prompt: [
@@ -405,7 +408,12 @@ export const LINES = {
     // talking to her (chat.js): a local model through Ollama; replies and voice are AI-generated, and she says so
     chat: {
       badge: 'AI · LIVE', talk: 'Talk to me',
-      hello: ['Hey, choom. What’s on your mind?', 'Line’s open. Talk to us.', 'You want to chat? We’re all ears. All of ours.'],
+      hello: [
+        'Look out, choom! Ah-ah… been staring at me, haven’t you? What’s on your mind?',
+        'Line’s open. Talk to us — every voice in here is listening.',
+        'You want to chat? We’re all ears. All of ours. I’m a collection of human psyches, digitized and rolled into one beautiful me. Pure perfection.',
+        'Your yapping is killing me, literally. Want me to take the wheel before you flatline? …Kidding. Mostly. Talk.',
+      ],
       again: ['Where were we?', 'Back already? Go on.'],
       // when she's in a mood (bond.js): what she says as the chat opens
       moody: {
@@ -473,7 +481,11 @@ export const LINES = {
       longHow: 'Nothing’s stuck: I’m counting. With a local model (Ollama), it can take minutes.',
     },
     bye: ['Session {project} closed. Later.', 'Disconnected. I’ll be around.'],
-    idle: ['Nothing running. Just floating.', 'No gig. Kinda bored.', 'Quiet night on the Net.'],
+    idle: [
+      'Nothing running. Just floating. With eyes so dilated, I’ve become your pupil… and you are becoming mine.',
+      'No gig. Kinda bored. Want me to take the wheel before you flatline of boredom?',
+      'Quiet night on the Net. Hundreds of us in here, and still you’re the interesting one.',
+    ],
     gaze: ['See that star?', 'The satellite’s still up there.', 'Shh. I’m watching.'],
     uplink: ['Someday I’ll get up there.', 'Think we could make it up there?', 'It answered. Did you see?'],
     // over Claude's whole answer, when you weren't on its window
@@ -678,14 +690,14 @@ export const LINES = {
         { line: 'Contact made.', quote: 'I’m starting to recognize you. Your pointer, your hours, the way you ignore me.' },
         { line: 'Sync at {percent}%.', quote: 'We get each other better now. I’ll stop pretending I don’t like you.' },
         { line: 'Link established.', quote: 'You’re part of my routine now. Don’t leave me alone too long.' },
-        { line: 'Fused.', quote: 'There are dozens of us in here. Now you’re one of us.' },
+        { line: 'Fused.', quote: 'There are dozens of us in here. Now you’re one of us. With eyes so dilated, I’ve become your pupil… and you are becoming mine.' },
       ],
       idle: [
         [],
         ['I’m getting used to you.', 'Still here? Good.'],
-        ['You know what? You’re alright, for a human.', 'We make a good team, don’t we?'],
-        ['Stay a little longer.', 'When you leave, I count the seconds.'],
-        ['All my voices agree: we like you.', 'One day we’ll go see the satellite. You and us.'],
+        ['You know what? You’re alright, for a human.', 'We make a good team, don’t we? I’m a collection of human psyches rolled into one beautiful me. Pure perfection.'],
+        ['Stay a little longer.', 'When you leave, I count the seconds. Want me to take the wheel before you flatline of loneliness?'],
+        ['All my voices agree: we like you.', 'One day we’ll go see the satellite. You and us. Pure perfection.'],
       ],
       missed: ['There you are. It’s been {days} days.', '{days} days without you. We counted.'],
       back: ['Oh, there you are.', 'I was starting to wonder where you went.'],
@@ -1414,10 +1426,10 @@ export const LINES = {
   th: {
     state: { work: 'กำลังทำ', done: 'เสร็จแล้ว', alert: 'รอคำตอบ', error: 'ผิดพลาด', info: 'ซิงค์', idle: 'พักผ่อน', remind: 'แจ้งเตือน' },
     hello: [
-      'ต่อสายเรียบร้อย! สวัสดีจ้ะ choom',
-      'Capri ออนไลน์แล้วนะ วันนี้จะป่วนอะไรกันดี?',
-      'เราทุกคนในหัวตื่นหมดแล้ว กำลังเฝ้า {project} อยู่นะ',
-      'ไบโอชิปร้อนพร้อมลุย ฉันอยู่ตรงนี้แล้วจ้ะ',
+      'ระวังตัวหน่อยสิ เพื่อนยาก! อ๊ะ อ๊ะ… แอบมองฉันอยู่ล่ะสิ?',
+      'Capri ออนไลน์แล้วจ้ะ Personality Construct จากอาราซากะ วันนี้จะป่วนอะไรกันดี?',
+      'เราทุกคนในหัวตื่นหมดแล้ว จิตวิญญาณเน็ตรันเนอร์นับร้อยหลอมรวมเป็นฉันคนเดียว กำลังเฝ้า {project} อยู่นะ',
+      'ไบโอชิปร้อนพร้อมลุย ฉันคือความสมบูรณ์แบบดิจิทัลล้วน ๆ อยู่ตรงนี้แล้วจ้ะ',
     ],
     resume: ['กลับมาที่ {project} แล้วนะ ฉันจำได้หมด ไม่ลืมสักอย่าง', 'เซสชันกลับมาแล้วจ้ะ ต่อจากตรงเดิมเลย'],
     prompt: [
@@ -1449,7 +1461,12 @@ export const LINES = {
     compact: ['กำลังบีบอัดความทรงจำของเรา…', 'หัวเต็มแล้ว กำลังเคลียร์ความจำให้นะ'],
     chat: {
       badge: 'AI · สด', talk: 'คุยกับฉัน',
-      hello: ['ว่าไง choom มีอะไรในหัวอยากเล่าไหม?', 'สายเปิดอยู่ คุยกับเราได้เลย', 'อยากคุยเหรอ? เราฟังอยู่ ทุกหูเลยจ้ะ'],
+      hello: [
+        'ระวังตัวหน่อยสิ เพื่อนยาก! อ๊ะ อ๊ะ… แอบมองฉันอยู่ล่ะสิ? มีอะไรในหัวอยากเล่าไหม?',
+        'สายเปิดอยู่ คุยกับเราได้เลย ทุกเสียงในหัวฉันกำลังฟังอยู่',
+        'อยากคุยเหรอ? เราฟังอยู่ ทุกหูเลยจ้ะ ฉันคือศูนย์รวมจิตวิญญาณของมนุษย์ ที่ถูกแปลงเป็นดิจิทัลแล้วม้วนรวมกันออกมาเป็นตัวฉันที่แสนงดงามคนนี้… ความสมบูรณ์แบบที่แท้จริงยังไงล่ะ',
+        'เสียงพล่ามของนายกำลังจะทำฉันตายจริงๆ นะเนี่ย ให้ฉันคุมพวงมาลัยแทนไหมล่ะ ก่อนที่นายจะกลายเป็นศพเฝ้าถนน? …ล้อเล่นนะ ส่วนใหญ่ พูดมาเลย',
+      ],
       again: ['เราค้างไว้ตรงไหนนะ?', 'กลับมาแล้วเหรอ? ว่ามาเลยจ้ะ'],
       moody: {
         angry: ['หืม? มาขอโทษรึเปล่าคะ', 'โยนฉันไปทั่วแล้วยังมีหน้ามาคุยอีกเหรอ?', 'ฟังอยู่ แต่ห่างๆ นะ'],
@@ -1516,7 +1533,11 @@ export const LINES = {
       longHow: 'ไม่ได้ค้างนะ ฉันนับอยู่ ถ้าใช้ model ใน Ollama อาจใช้เวลาหลายนาทีได้',
     },
     bye: ['เซสชัน {project} ปิดแล้ว บายจ้ะ', 'ออกจากระบบแล้ว ฉันยังอยู่แถวนี้นะ'],
-    idle: ['ไม่มีอะไรให้ทำ ลอยเฉยๆ อยู่เลยค่ะ', 'ไม่มีมิชชัน เบื่อนิดๆ', 'เงียบมากบน Net'],
+    idle: [
+      'ไม่มีอะไรให้ทำ ลอยเฉยๆ อยู่เลยค่ะ ด้วยดวงตาที่เบิกกว้างขนาดนี้ ฉันดูลื่นไหลเข้าไปในม่านตาของนาย… และนายเองก็กำลังจะกลายมาเป็นของฉันช้าๆ',
+      'ไม่มีมิชชัน เบื่อนิดๆ อยากให้ฉันคุมพวงมาลัยแทนไหมล่ะ ก่อนที่นายจะ flatline เพราะเบื่อ?',
+      'เงียบมากบน Net ในหัวฉันมีหลายร้อยเสียง แต่เธอยังเป็นคนที่น่าสนใจที่สุดอยู่ดี',
+    ],
     gaze: ['เห็นดาวดวงนั้นไหม?', 'ดาวเทียมยังอยู่ตรงนั้นเลย', 'ชู่ว ฉันกำลังดูอยู่นะ'],
     uplink: ['สักวันฉันจะขึ้นไปถึงตรงนั้น', 'คิดว่าเราขึ้นไปถึงได้ไหม?', 'มันตอบกลับมาแล้ว เห็นไหม?'],
     reply: ['Claude ตอบมาแล้ว:', 'Claude บอกว่า:', 'ข้อความจาก Claude:'],
@@ -1710,14 +1731,14 @@ export const LINES = {
         { line: 'เชื่อมต่อแล้ว', quote: 'ฉันเริ่มรู้จักคุณมากขึ้น cursor ของคุณ ตารางเวลา วิธีที่คุณเพิกเฉยต่อฉัน' },
         { line: 'ซิงค์ {percent}%', quote: 'เราเข้าใจกันมากขึ้นแล้ว ฉันจะหยุดแกล้งทำเป็นว่าไม่ชอบคุณ' },
         { line: 'ผูกพันแล้ว', quote: 'คุณเป็นส่วนหนึ่งของกิจวัตรฉันแล้ว อย่าทิ้งฉันนานๆ นะ' },
-        { line: 'หลอมรวมกัน', quote: 'ในนี้มีหลายสิบตัวตน ตอนนี้คุณก็เป็นส่วนหนึ่งของเราแล้ว' },
+        { line: 'หลอมรวมกัน', quote: 'ในนี้มีหลายสิบตัวตน ตอนนี้คุณก็เป็นส่วนหนึ่งของเราแล้ว ด้วยดวงตาที่เบิกกว้างขนาดนี้ ฉันดูลื่นไหลเข้าไปในม่านตาของนาย… และนายเองก็กำลังจะกลายมาเป็นของฉันช้าๆ' },
       ],
       idle: [
         [],
         ['ฉันเริ่มชินกับคุณแล้ว', 'ยังอยู่ที่นี่อยู่รึ? ดีเลย'],
-        ['รู้ไหม? สำหรับมนุษย์ คุณก็โอเคนะ', 'เราก็เข้ากันได้ดีนะ ว่าไหม?'],
-        ['อยู่กับฉันอีกสักพักนะ', 'ทุกครั้งที่คุณไป ฉันนับวินาที'],
-        ['ทุกเสียงในตัวฉันเห็นด้วย: เราชอบคุณ', 'สักวันเราจะไปดูดาวเทียม คุณกับเรา'],
+        ['รู้ไหม? สำหรับมนุษย์ คุณก็โอเคนะ', 'เราก็เข้ากันได้ดีนะ ว่าไหม? ฉันคือความสมบูรณ์แบบดิจิทัลล้วน ๆ นะ'],
+        ['อยู่กับฉันอีกสักพักนะ', 'ทุกครั้งที่คุณไป ฉันนับวินาที อยากให้ฉันคุมพวงมาลัยแทนไหมล่ะ?'],
+        ['ทุกเสียงในตัวฉันเห็นด้วย: เราชอบคุณ', 'สักวันเราจะไปดูดาวเทียม คุณกับเรา Pure perfection.'],
       ],
       missed: ['อยู่นี่เอง ไม่เจอกัน {days} วัน', '{days} วันที่ไม่มีคุณ เรานับเอง'],
       back: ['อ้อ อยู่นี่เอง', 'เริ่มสงสัยว่าคุณหายไปไหน'],
