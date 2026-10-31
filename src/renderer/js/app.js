@@ -16,6 +16,7 @@ import { Pc } from './pc.js';
 import { Tts, SAMPLE } from './tts.js';
 import { linesFor } from './lines.js';
 import { pick, fmt, reducedMotion } from './util.js';
+import { installExtras } from './extras.js';
 
 const host = window.host;
 
@@ -229,6 +230,7 @@ async function boot() {
   const tts = new Tts({ capri, lang: () => brain.lang });
   tts.muted = Boolean(config.muted);
   tts.setMode(config.speak);
+  tts.applyPreset?.(config.voicePreset || 'animeRobot');
   tts.onNotice = (line) => panel.say({ kind: 'info', face: 'aside', line, hold: 9000 });
   const streamOf = panel.stream.bind(panel);
   panel.stream = (text, opts) => {
@@ -262,6 +264,9 @@ async function boot() {
   jealousy.enabled = config.jealous !== false;
   chat.jealousy = jealousy;
   brain.onRival = (key) => jealousy.onRivalEvent(key);
+  // Jealous graffiti on the rival window (possess text)
+  {
+  }
   const reminders = new Reminders({ host, list: config.reminders || [] });
   chat.reminders = reminders;
   chat.onMessage = () => bond.add('chat', 2);
@@ -274,6 +279,11 @@ async function boot() {
   pc.enabled = config.pcReact !== false;
   let wantsOut = config.visible !== false; // not put away in your settings (Ctrl+Alt+C, her menu)
   pc.wantsOut = () => wantsOut;
+
+  // PC reactions only: plug/unplug + CPU hot
+  const extras = installExtras({
+    capri, panel, brain, bond, chat, look, fx, launch: null, host, tts, pc, voice,
+  });
 
   // Clicking her: what's going on, or she offers to talk. Sulking, she turns her back on you.
   capri.onClick = () => {
@@ -355,8 +365,10 @@ async function boot() {
     await capri.perform('split');
     capri.perform('hop');
     panel.say({
-      kind: 'done', badge: `${brain.t.state.info} ${bond.percent}%`, face: stage >= 3 ? 'laugh' : 'look',
-      line: fmt(up.line, { percent: bond.percent }), quote: up.quote, progress: bond.percent / 100, hold: 9000,
+      kind: 'done', face: stage >= 3 ? 'laugh' : 'look',
+      line: fmt(up.line, { percent: bond.percent }),
+      quote: up.quote,
+      hold: 9000,
     });
   }, 3000);
   // time spent together: a little sync for every ten minutes you're at your PC with her out
@@ -520,7 +532,14 @@ async function boot() {
   };
 
   // what's in here, for --dev scripts (debug route `eval`)
-  window.dev = { tts, capri, brain, panel, chat, guide, fx, voice, bond, jealousy, reminders, look, pc, setup, screens: () => screens };
+  window.dev = { tts, capri, brain, panel, chat, guide, fx, voice, bond, jealousy, reminders, look, pc, setup, extras, screens: () => screens };
+
+  // Global shortcut for status HUD (Capri window is click-through — renderer keys won't fire)
+  // Main process should register: globalShortcut.register('CommandOrControl+Alt+S', () => sendCommand('statusHud'))
+  try {
+    host.registerShortcut?.('CommandOrControl+Alt+S', () => host.sendCommand?.('statusHud') || host.command?.({ name: 'statusHud' }));
+    host.bindShortcut?.('CommandOrControl+Alt+S', 'statusHud');
+  } catch { /* main may not expose this yet */ }
 
   host.onClaudeEvent((evt) => brain.handle(evt));
   host.onWindows((data) => {
@@ -618,6 +637,7 @@ async function boot() {
     pc.enabled = cfg.pcReact !== false;
     wantsOut = cfg.visible !== false;
     tts.muted = Boolean(cfg.muted);
+    if (cfg.voicePreset && tts.applyPreset) tts.applyPreset(cfg.voicePreset);
     if ((cfg.speak || 'off') !== tts.mode) {
       tts.setMode(cfg.speak);
       tts.last = '';
@@ -659,6 +679,9 @@ async function boot() {
         break;
       case 'status':
         brain.status();
+        break;
+      case 'demo':
+        capri.teleport(capri.spot('random'));
         break;
       case 'customize': // "Make her yours" in her menu
         custom.open();
@@ -856,7 +879,9 @@ async function boot() {
   const hooks = await host.hooksStatus();
   // her welcome: the first time, or while she's meant to watch Claude Code and isn't plugged into it
   if (!config.welcomed || (config.claude && !hooks.installed)) guide.welcome();
-  else panel.say({ kind: 'info', line: brain.onlineLine(), hold: 4000 });
+  else {
+    panel.say({ kind: 'info', line: brain.onlineLine(), hold: 4000 });
+  }
 
   // In the evening, after a real day's work, she brings you her report card once, on her own,
   // at a quiet moment.
