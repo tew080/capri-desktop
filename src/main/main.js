@@ -79,6 +79,19 @@ function forgetChats() {
 function serveProtocol() {
   protocol.handle('capri', (request) => {
     const url = new URL(request.url);
+    // capri://tts/?tl=th&q=... -> her online voice (tts.js): the text is read by Google Translate's
+    // text-to-speech, fetched here so the overlay needs no network access of its own
+    if (url.host === 'tts') {
+      const tl = (url.searchParams.get('tl') || 'en').replace(/[^a-z-]/gi, '').slice(0, 8) || 'en';
+      const q = (url.searchParams.get('q') || '').slice(0, 200);
+      if (!q) return new Response('empty', { status: 400 });
+      return net.fetch(`https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=${tl}&q=${encodeURIComponent(q)}`, {
+        headers: { 'User-Agent': 'Mozilla/5.0', Referer: 'https://translate.google.com/' },
+      }).then(async (res) => {
+        if (!res.ok) return new Response('unavailable', { status: 502 });
+        return new Response(await res.arrayBuffer(), { headers: { 'Content-Type': 'audio/mpeg' } });
+      }).catch(() => new Response('offline', { status: 502 }));
+    }
     const base = url.host === 'usersounds' ? userSoundsDir() : ROOT;
     const target = path.resolve(base, '.' + decodeURIComponent(url.pathname));
     if (target !== base && !target.startsWith(base + path.sep)) {
@@ -325,7 +338,7 @@ function resolveLang(setting) {
 // What the overlay gets: `lang` is the resolved one, `langSetting` what the user picked.
 function rendererConfig() {
   const { apiKeys, ...cfg } = config.load(); // the keys stay here: the overlay only learns which ones are set
-  return { ...cfg, keys: Object.keys(apiKeys || {}), assistant: activeAssistant().id, lang: resolveLang(cfg.lang), langSetting: cfg.lang, floorGap: overlayArea().gap };
+  return { ...cfg, speak: readMemory().speakMode || 'off', keys: Object.keys(apiKeys || {}), assistant: activeAssistant().id, lang: resolveLang(cfg.lang), langSetting: cfg.lang, floorGap: overlayArea().gap };
 }
 
 function updateConfig(patch) {
@@ -460,6 +473,18 @@ function rebuildTray() {
     { label: t.possess, type: 'checkbox', checked: cfg.possess, click: (item) => updateConfig({ possess: item.checked }) },
     { label: t.jealous, type: 'checkbox', checked: cfg.jealous !== false, click: (item) => updateConfig({ jealous: item.checked }) },
     { label: t.pcReact, type: 'checkbox', checked: cfg.pcReact !== false, click: (item) => updateConfig({ pcReact: item.checked }) },
+    {
+      // her voice out loud (tts.js): off, cartoon babble, or Windows' voice pitched up
+      label: t.speak,
+      submenu: [['off', t.speakOff], ['babble', t.speakBabble], ['speech', t.speakVoice]].map(([mode, label]) => ({
+        label, type: 'radio', checked: (readMemory().speakMode || 'off') === mode,
+        click: () => {
+          saveMemory({ speakMode: mode });
+          overlay?.webContents.send('capri:config', rendererConfig());
+          rebuildTray();
+        },
+      })),
+    },
     {
       label: t.rainTip, type: 'checkbox', checked: rainTipOn(),
       click: (item) => { saveMemory({ rainTip: item.checked }); rebuildTray(); },

@@ -24,6 +24,7 @@ const TRAY = {
     lookNow: 'Regarde mon écran', lookAuto: 'Regarder mon écran de temps en temps',
     pcReact: 'Réagir à mon PC',
     rainTip: 'Alerte parapluie le matin',
+    speak: 'Sa voix', speakOff: 'Muette', speakBabble: 'Charabia de dessin animé', speakVoice: 'Vraie voix (aiguë)',
     cloudFree: 'gratuit, en ligne', cloudSignin: 'Me connecter à Ollama (modèles cloud gratuits)…',
   },
   en: {
@@ -46,6 +47,7 @@ const TRAY = {
     lookNow: 'Look at my screen', lookAuto: 'Look at my screen now and then',
     pcReact: 'React to my PC',
     rainTip: 'Morning umbrella tip',
+    speak: 'Her voice', speakOff: 'Silent', speakBabble: 'Cartoon babble', speakVoice: 'Real speech (chipmunk)',
     cloudFree: 'free, online', cloudSignin: 'Sign in to Ollama (free cloud models)…',
   },
   es: {
@@ -68,6 +70,7 @@ const TRAY = {
     lookNow: 'Mira mi pantalla', lookAuto: 'Mirar mi pantalla de vez en cuando',
     pcReact: 'Reaccionar a mi PC',
     rainTip: 'Aviso de paraguas por la mañana',
+    speak: 'Su voz', speakOff: 'Muda', speakBabble: 'Balbuceo de dibujos', speakVoice: 'Voz real (aguda)',
     cloudFree: 'gratis, en línea', cloudSignin: 'Conectarme a Ollama (modelos en la nube gratis)…',
   },
   pt: {
@@ -90,6 +93,7 @@ const TRAY = {
     lookNow: 'Olha minha tela', lookAuto: 'Olhar minha tela de vez em quando',
     pcReact: 'Reagir ao meu PC',
     rainTip: 'Aviso de guarda-chuva de manhã',
+    speak: 'A voz dela', speakOff: 'Sem voz', speakBabble: 'Balbucio de desenho', speakVoice: 'Voz real (aguda)',
     cloudFree: 'grátis, online', cloudSignin: 'Entrar no Ollama (modelos na nuvem grátis)…',
   },
   ru: {
@@ -112,6 +116,7 @@ const TRAY = {
     lookNow: 'Посмотри на мой экран', lookAuto: 'Иногда смотреть на мой экран',
     pcReact: 'Реагировать на мой ПК',
     rainTip: 'Утренний совет про зонт',
+    speak: 'Её голос', speakOff: 'Без голоса', speakBabble: 'Мультяшное бормотание', speakVoice: 'Настоящая речь (писклявая)',
     cloudFree: 'бесплатно, онлайн', cloudSignin: 'Войти в Ollama (бесплатные облачные модели)…',
   },
   th: {
@@ -134,6 +139,7 @@ const TRAY = {
     lookNow: 'ดูหน้าจอของฉัน', lookAuto: 'แอบดูหน้าจอของฉันเป็นครั้งคราว',
     pcReact: 'ตอบสนองต่อพีซีของฉัน',
     rainTip: 'เตือนพกร่มตอนเช้า',
+    speak: 'เสียงของเธอ', speakOff: 'ปิดเสียง', speakBabble: 'เสียงการ์ตูน (บลิปจ๊อกแจ๊ก)', speakVoice: 'พูดจริง (เสียงเด็กการ์ตูน)',
     cloudFree: 'ฟรี, ออนไลน์', cloudSignin: 'ลงชื่อเข้าใช้ Ollama (โมเดลคลาวด์ฟรี)…',
   },
 };

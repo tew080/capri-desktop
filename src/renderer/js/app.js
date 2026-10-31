@@ -13,6 +13,7 @@ import { Bond, Jealousy } from './bond.js';
 import { Reminders, clock } from './reminders.js';
 import { Look } from './look.js';
 import { Pc } from './pc.js';
+import { Tts, SAMPLE } from './tts.js';
 import { linesFor } from './lines.js';
 import { pick, fmt, reducedMotion } from './util.js';
 
@@ -223,6 +224,23 @@ async function boot() {
   // Talking to her (chat.js): "Talk to her" in her menu, or the button when you click her idle.
   const chat = new Chat({ capri, panel, voice, host, brain });
   brain.onTalk = () => chat.start();
+  // Her voice out loud (tts.js, her menu › Her voice): what she answers in her chat, when she's done
+  // (a line added under an answer is read alone). The chat closing cuts her off.
+  const tts = new Tts({ capri, lang: () => brain.lang });
+  tts.muted = Boolean(config.muted);
+  tts.setMode(config.speak);
+  tts.onNotice = (line) => panel.say({ kind: 'info', face: 'aside', line, hold: 9000 });
+  const streamOf = panel.stream.bind(panel);
+  panel.stream = (text, opts) => {
+    streamOf(text, opts);
+    if (opts?.done && chat.open) tts.say(text);
+  };
+  const closeChat = chat.close.bind(chat);
+  chat.close = () => {
+    closeChat();
+    tts.stop();
+    tts.last = '';
+  };
   // Getting her chat going with buttons (setup.js): Ollama and a model, a key, or an address
   const setup = new Setup({ guide, panel, host, brain, capri, voice });
   guide.setup = setup;
@@ -502,7 +520,7 @@ async function boot() {
   };
 
   // what's in here, for --dev scripts (debug route `eval`)
-  window.dev = { capri, brain, panel, chat, guide, fx, voice, bond, jealousy, reminders, look, pc, setup, screens: () => screens };
+  window.dev = { tts, capri, brain, panel, chat, guide, fx, voice, bond, jealousy, reminders, look, pc, setup, screens: () => screens };
 
   host.onClaudeEvent((evt) => brain.handle(evt));
   host.onWindows((data) => {
@@ -599,6 +617,12 @@ async function boot() {
     look.configure(cfg);
     pc.enabled = cfg.pcReact !== false;
     wantsOut = cfg.visible !== false;
+    tts.muted = Boolean(cfg.muted);
+    if ((cfg.speak || 'off') !== tts.mode) {
+      tts.setMode(cfg.speak);
+      tts.last = '';
+      if (tts.mode !== 'off') tts.say(SAMPLE[cfg.lang] || SAMPLE.en); // a sample, as soon as she's picked
+    }
     reminders.sync(cfg.reminders); // one may have been cancelled from her menu
     capri.wander = cfg.wander;
     capri.possessWindows = cfg.possess;
