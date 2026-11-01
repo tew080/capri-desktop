@@ -43,6 +43,7 @@ const DEFAULTS = {
   watchScreen: false, // she looks at your screen now and then and says something about it (look.js)
   newsEvery: 0,      // minutes between the news she tells (news.js); 0: off
   newsSource: 'local', // 'local': the news of your language's edition, 'world': world news (English)
+  mischiefIdle: 0,   // minutes of idle before she causes a little chaos on screen (mischief.js); 0: off
   lookAsked: false,  // she told you what looking means (where the picture goes) and you said yes
 };
 

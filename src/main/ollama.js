@@ -144,6 +144,11 @@ async function placement(model) {
   return { size: m.size, vram: m.size_vram, gpuPercent: m.size ? Math.round((m.size_vram / m.size) * 100) : 0, ctx: m.context_length || null };
 }
 
+// Whether the model is in memory right now (a chat with it won't wait for it to load).
+async function isLoaded(model) {
+  return Boolean(await placement(model).catch(() => null));
+}
+
 const MIN_CTX = 6144;
 
 // The biggest context whose KV cache still fits in what VRAM has left, with the reserve (a compute
@@ -193,15 +198,27 @@ async function optionsFor(model) {
 
 // Loads the model into memory ahead of the first message, with the same options as the chat (another
 // num_ctx would load it twice). Nothing to load for a cloud model.
-async function warm(model) {
-  if (isCloud(model)) return;
+// Resolves when the model is in memory: true (loaded), false (couldn't), null (nothing to load). Never
+// rejects. Asked again while it loads, it hands back the same wait instead of a second request.
+const warming = new Map(); // model -> the load under way
+function warm(model) {
+  if (warming.has(model)) return warming.get(model);
+  const job = warmOnce(model).catch(() => false).finally(() => warming.delete(model));
+  warming.set(model, job);
+  return job;
+}
+
+async function warmOnce(model) {
+  if (isCloud(model)) return null;
   const { num_ctx, num_gpu } = await optionsFor(model).catch(() => ({}));
-  if (!num_ctx) return;
-  fetch(`${base()}/api/generate`, {
+  if (!num_ctx) return false;
+  const res = await fetch(`${base()}/api/generate`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ model, keep_alive: '30m', options: { num_ctx, ...(num_gpu && { num_gpu }) } }),
-  }).catch(() => {});
+    body: JSON.stringify({ model, stream: false, keep_alive: '30m', options: { num_ctx, ...(num_gpu && { num_gpu }) } }),
+    signal: AbortSignal.timeout(180000), // a big model off a slow disk
+  }).catch(() => null);
+  return Boolean(res?.ok);
 }
 
 // A small model stuck repeating itself: the same 24 characters, three times over.
@@ -306,4 +323,4 @@ async function status(model) {
   return where && { ...where, gpuTotal: gpu?.total || 0, gpuUsed: gpu?.used || 0 };
 }
 
-module.exports = { base, models, isCloud, account, freeModels, warm, chat, canSee, configure, status, PRESETS };
+module.exports = { base, models, isCloud, isLoaded, account, freeModels, warm, chat, canSee, configure, status, PRESETS };

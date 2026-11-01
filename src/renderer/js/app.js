@@ -17,6 +17,7 @@ import { Tts, SAMPLE } from './tts.js';
 import { linesFor } from './lines.js';
 import { pick, fmt, reducedMotion } from './util.js';
 import { installExtras, bootPayload } from './extras.js';
+import { Mischief } from './mischief.js';
 
 const host = window.host;
 
@@ -709,7 +710,12 @@ async function boot() {
     capri.setView(innerWidth, innerHeight, innerHeight - floorGap);
   });
 
+  // She gets bored when the PC is left alone (mischief.js, her menu › Mischief)
+  const mischief = new Mischief({ capri, fx, panel, voice, tts, extras, host, brain, chat, guide, screens: () => screens, goToScreen });
+  mischief.configure(config);
+
   host.onConfig((cfg) => {
+    mischief.configure(cfg);
     voice.configure(cfg);
     jealousy.enabled = cfg.jealous !== false;
     followOn = cfg.follow !== false;
@@ -871,6 +877,9 @@ async function boot() {
         capri.perform('hop');
         panel.say({ kind: 'info', face: 'look', line: cmd.line, hold: 7000 });
         break;
+      case 'mischief': // "Mischief now" in her menu (the idle trigger runs from mischief.js itself)
+        mischief.run({ force: Boolean(cmd.force) });
+        break;
       case 'news': // a headline in her words (main.js, news.js); on a timer she doesn't cut in on anything
         if (!cmd.force && (capri.stowed || capri.dormant || capri.hidden || chat.open || guide.running || panel.visible || capri.mode === 'alert')) break;
         if (capri.stowed) {
@@ -891,6 +900,33 @@ async function boot() {
         if (capri.stance === 'peek') await capri.unpeek();
         if (!capri.gaze({ big: true })) setTimeout(() => capri.gaze({ big: true }), 1500);
         break;
+      case 'model': { // at start: her model loading, then ready (main.js, preloadSelectedModel)
+        if (capri.stowed || capri.dormant || chat.open || guide.running) break;
+        // over her boot line or this bubble's previous step, never over something else being read
+        if (panel.visible && !panel.current?.boot && panel.current?.kind !== 'info') break;
+        const th = brain.lang === 'th';
+        const name = String(cmd.model || '').replace(/:latest$/, '');
+        const view = {
+          loading: { line: `CAPRI.NET · loading ${name}`, badge: th ? 'ซิงค์' : 'SYNC', face: 'calm', hold: null },
+          ready: { line: `CAPRI.NET · ${name} ready`, badge: th ? 'พร้อม' : 'READY', face: 'grin', hold: 3800 },
+          failed: { line: `CAPRI.NET · ${name} offline`, badge: th ? 'ออฟไลน์' : 'OFFLINE', face: 'aside', hold: 4500 },
+        }[cmd.state];
+        if (!view) break;
+        panel.say({ kind: 'info', tag: 'CAPRI', boot: true, ...view });
+        if (cmd.state !== 'ready') break;
+        // everything is loaded: she greets you, in her own words, new each time (her model writes it;
+        // one of her written lines if it can't)
+        const line = (await chat.greet().catch(() => null)) || pick(chat.t.hello);
+        const free = !panel.visible || panel.current?.boot; // not over something you may be reading
+        if (!free || chat.open || guide.running || capri.stowed || capri.dormant) break;
+        capri.perform('hop');
+        panel.say({
+          kind: 'info', tag: 'CAPRI', boot: true, face: pick(['grin', 'smug', 'laugh', 'look']), badge: chat.t.badge,
+          line, hold: Math.min(14000, 6000 + line.length * 60),
+        });
+        if (tts.mode !== 'off') tts.say(line);
+        break;
+      }
       case 'hooks':
         if (cmd.ok) panel.say({ kind: 'info', line: cmd.action === 'install' ? t.hooksOk : t.hooksRemoved, hold: 6000 });
         else panel.say({ kind: 'error', line: fmt(t.hooksFail, { error: cmd.error }), hold: 9000 });

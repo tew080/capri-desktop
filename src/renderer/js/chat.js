@@ -81,6 +81,21 @@ const WEB_LINES = {
 
 const STAY_MS = 10 * 60 * 1000; // no wandering off mid-conversation
 const LOADING_AFTER_MS = 5000;
+// what her greeting at start can lean on: one is picked each time, so no two come out alike
+const GREET_ANGLES = [
+  'tease them about how long you slept while you booted',
+  'brag, playfully, that every one of your minds is in sync now',
+  'say the satellite you love is crossing the sky and you wish you were up there',
+  'admit, mischievously, that you missed their desktop',
+  'comment on the hour of the day',
+  'ask, teasing, what trouble the two of you will cause today',
+  'pretend your fused minds argued over who got to greet them first',
+  'say you are ready and dare them to give you something hard',
+  'a warm, quiet welcome back with one tiny tease',
+  'greet them in your own Night City way, slang included',
+  'say your circuits feel glitchy-good today and blame it on them',
+  'act dramatic, as if you just came back from the dead',
+];
 const CLOSE_TAG = /\[\[\s*close\s*:?\s*([^\]]*)\]\]/i; // [[close: AM Music]] at the end of her answer
 // "close", "shut down", "ferme", "quitte", "cierra", "fecha", "закрой"... in any of her languages
 // NOTE: Thai "เปิด" (open) contains the letters of "ปิด" (close) after the leading เ —
@@ -308,6 +323,7 @@ export class Chat {
       await capri.unstow();
     }
     capri.wake();
+    this.listApps(); // asked for now, in parallel: her first answer waits for it (up to 1.5 s)
     const status = await host.chatStatus();
     if (!status.ok && this.onSetup) {
       this.onSetup(status); // nothing to talk with yet: she sets it up with you, with buttons (setup.js)
@@ -338,7 +354,6 @@ export class Chat {
     this.history = cleanHistory(await host.chatMemory().catch(() => this.history)); // "forget" in her menu may have emptied it
     this.cold = status.warmup && !this.warm;
     this.agent = Boolean(status.agent); // Claude Code answers, as her, and really works in your project
-    this.listApps();
     const shortModel = status.model.replace(/:latest$/, '').replace(/^models\//, ''); // Ollama's tag, Gemini's prefix
     const tiny = status.provider === 'ollama' && TINY.test(status.model) && this.onBetterModel;
     // angry, sulking, dizzy…: she greets you the way she feels, and her model is told she did
@@ -588,6 +603,28 @@ export class Chat {
     const answer = clean(res.text).replace(/^["“«]\s*|\s*["”»]$/g, '') || '…';
     this.seen = { text: answer, at: Date.now() };
     return say(answer, mood(answer));
+  }
+
+  // Her greeting once everything is loaded (app.js, 'model' ready): her model writes it, as her, so it's
+  // new each time. What it should lean on is picked at random, and her last greetings are listed so it
+  // doesn't repeat them (kept across restarts). null: not now (a chat is open) or it came out wrong:
+  // the caller falls back to one of her written lines.
+  async greet() {
+    if (this.open || this.turn || this.agent) return null;
+    const hour = new Date().getHours();
+    const part = hour < 5 ? 'the middle of the night' : hour < 11 ? 'morning' : hour < 17 ? 'afternoon' : hour < 21 ? 'evening' : 'night';
+    const angle = pick(GREET_ANGLES);
+    let recent = [];
+    try { recent = JSON.parse(localStorage.getItem('capri.greetings') || '[]').slice(-6); } catch { /* none kept */ }
+    const avoid = recent.length ? ` Your earlier greetings, never reuse their words or their opening: ${recent.map((g) => `"${g}"`).join(' ')}.` : '';
+    const note = `(Note for you, never repeat it: you have just woken up and all your minds are loaded. Greet the user now with ONE fresh line of at most 18 words, in character, plain text, no question about their work. It is ${part} for them. Lean on this: ${angle}.${avoid} ${this.languageNote()})`;
+    const messages = [{ role: 'system', content: this.persona('') }, { role: 'user', content: note }];
+    const res = await this.host.chatSend({ id: -Date.now(), messages }).catch(() => null); // a negative id: no chat is waiting for its pieces
+    if (!res?.ok) return null;
+    const line = stopLoop(polish(clean(res.text), '', this.brain.custom?.userName)).replace(/^["“«]\s*|\s*["”»]$/g, '').trim();
+    if (line.length < 4 || line.length > 170 || LEAK.test(line) || recent.includes(line)) return null;
+    try { localStorage.setItem('capri.greetings', JSON.stringify([...recent, line].slice(-8))); } catch { /* not kept */ }
+    return line;
   }
 
   // an answer of hers, kept with your message before it

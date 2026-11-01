@@ -50,9 +50,11 @@ let tray = null;
 let trayMenu = null; // also what she opens when you right-click her
 let demoTimer = null;
 let windowWatch = null;
+let screenLocked = false; // no chaos on a locked screen (mischief.js)
 // the watcher only speaks when something changes: the overlay asks for this when it (re)loads
 let lastWindows = null;
 let chatModels = null; // the provider's models, as last seen (null: not reached)
+let modelsSeen = { at: 0, provider: '' }; // when, and for which provider: her chat opens on a list this fresh without asking again
 let chatError = null;  // why not, when the provider said
 let chatErrorCode = null; // 'nokey' or 'nourl': what her setup should ask for
 let ollamaLine = null; // how the model runs now, for her menu: 'GPU 100% · ctx 8192'
@@ -578,6 +580,18 @@ function rebuildTray() {
       },
     },
     {
+      label: t.mischief,
+      submenu: [
+        { label: t.mischiefNow, click: () => sendCommand('mischief', { force: true }) },
+        { type: 'separator' },
+        { label: t.mischiefWhen, enabled: false },
+        ...[0, 5, 10, 30, 60].map((mins) => ({
+          label: mins ? t.mischiefIdle(mins) : t.mischiefOff, type: 'radio', checked: (Number(cfg.mischiefIdle) || 0) === mins,
+          click: () => updateConfig({ mischiefIdle: mins }),
+        })),
+      ],
+    },
+    {
       label: t.news,
       submenu: [
         { label: t.newsNow, click: () => tellNews({ force: true }) },
@@ -682,6 +696,39 @@ function runHooks(action, { quiet = false } = {}) {
   return outcome;
 }
 
+// The model's preload at start, as her overlay tells it: a bubble that goes loading -> ready (app.js,
+// 'model' command). The overlay can't take commands before its boot is done, so the state waits here
+// until it asks for her hooks' status (its last step before the first bubble).
+const modelBoot = { model: '', state: null, rendererReady: false };
+function announceModel() {
+  if (!modelBoot.rendererReady || !modelBoot.state) return;
+  sendCommand('model', { state: modelBoot.state, model: modelBoot.model });
+}
+
+// At startup: load the model she was last set to talk with, so the first message doesn't wait for it.
+// Only Ollama has anything to load (llm.warm does nothing for other providers). Ollama may still be
+// starting (autostart with Windows), so try again for about a minute. The model is the one she chats with
+// (the one picked, else the first on this PC: pickModel), so the first message never waits for it.
+async function preloadSelectedModel(tries = 12) {
+  for (let i = 0; i < tries; i++) {
+    if (config.load().provider !== 'ollama') return;
+    const models = await refreshModels(); // null while Ollama isn't answering
+    if (models) {
+      const model = pickModel();
+      if (!model || ollama.isCloud(model)) return; // none installed, or nothing to load
+      Object.assign(modelBoot, { model, state: 'loading' });
+      announceModel();
+      const loaded = await llm.warm('ollama', model);
+      if (loaded === null) return;
+      modelBoot.state = loaded ? 'ready' : 'failed';
+      announceModel();
+      refreshOllamaLine().catch(() => {}); // her menu: GPU and context of what just loaded
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+  }
+}
+
 // The model she talks with: the one picked in her menu if it's still installed, else the first one
 // on this PC (a cloud model only once you pick it).
 function pickModel(cfg = config.load()) {
@@ -716,6 +763,7 @@ async function refreshModels() {
     chatErrorCode = err.code || null;
     return null;
   });
+  if (chatModels) modelsSeen = { at: Date.now(), provider: cfg.provider };
   rebuildTray();
   if (cfg.provider === 'ollama' && chatModels) refreshCloud(); // in the background: it asks ollama.com
   return chatModels;
@@ -888,7 +936,14 @@ function registerIpc() {
     return { origin: { x: o.x, y: o.y }, width: o.width, height: o.height, gap: overlayArea().gap };
   });
   ipcMain.handle('config:get', () => rendererConfig());
-  ipcMain.handle('hooks:status', () => activeHooks().status());
+  ipcMain.handle('hooks:status', () => {
+    // the overlay's boot is done (this is its last step): the model's bubble can follow her first line
+    if (!modelBoot.rendererReady) {
+      modelBoot.rendererReady = true;
+      setTimeout(announceModel, 900);
+    }
+    return activeHooks().status();
+  });
   ipcMain.handle('config:set', (_e, patch) => updateConfig(patch));
   ipcMain.handle('demo:window', (_e, open) => demoWindow(open));
   // right-clicking her: the same menu as the tray icon (which Windows often hides behind the ^ by the clock)
@@ -902,13 +957,18 @@ function registerIpc() {
   ipcMain.handle('chat:status', async () => {
     const cfg = config.load(true); // keys may have been edited by hand
     const { provider } = cfg;
-    const models = await refreshModels();
+    // the list was read a moment ago (at start, or by her last chat): her panel opens at once, with no
+    // round trip to the server first. An older list, or none: asked again.
+    const fresh = chatModels && modelsSeen.provider === provider && Date.now() - modelsSeen.at < 30000;
+    const models = fresh ? chatModels : await refreshModels();
     if (!models) return { ok: false, error: chatError || 'offline', code: chatErrorCode, provider };
     if (!models.length) return { ok: false, error: 'nomodel', provider };
     const model = pickModel();
-    llm.warm(provider, model); // loading while you type your first message
     const local = llm.isLocal(provider, cfg, model);
-    return { ok: true, provider, model, agent: provider === 'claude', local, warmup: provider === 'ollama' && local };
+    // already in memory (preloaded at start): her first answer won't wait, so no "waking up" line
+    const loaded = provider === 'ollama' && local ? await ollama.isLoaded(model).catch(() => false) : false;
+    if (!loaded) llm.warm(provider, model); // else loading while you type your first message
+    return { ok: true, provider, model, agent: provider === 'claude', local, warmup: provider === 'ollama' && local && !loaded };
   });
   // her answer, streamed to the overlay piece by piece as `chat:delta`
   ipcMain.handle('chat:send', async (_e, { id, messages }) => {
@@ -946,6 +1006,8 @@ function registerIpc() {
   ipcMain.handle('look:say', (_e, request) => sayAboutSnap(request || {}));
   // how hard the processor works, in %, since the last time she asked (pc.js)
   let cpuBefore = null;
+  // how long nobody has touched the PC (seconds), and whether the screen is locked (mischief.js)
+  ipcMain.handle('pc:idle', () => ({ idle: powerMonitor.getSystemIdleTime(), locked: screenLocked }));
   ipcMain.handle('pc:cpu', () => {
     const now = os.cpus().map(({ times: t }) => ({ idle: t.idle, total: t.user + t.nice + t.sys + t.idle + t.irq }));
     const before = cpuBefore;
@@ -1178,6 +1240,11 @@ function registerIpc() {
       return { ok: false, error: err.message };
     }
   });
+  // she checked your PC and now closes her own status window (mischief.js)
+  ipcMain.handle('pc:statusClose', () => {
+    if (statusWin && !statusWin.isDestroyed()) statusWin.close();
+    return true;
+  });
 }
 
 // Only in --dev: lets scripts drive the overlay and grab frames of it (no desktop content, just our window).
@@ -1333,7 +1400,7 @@ function main() {
     if (!globalShortcut.register('Control+Alt+X', locateCapri)) console.warn('[capri] Ctrl+Alt+X is taken by another app');
     llm.restoreClaude(readMemory().claude);
     ollama.configure(config.load());
-    refreshModels(); // for her menu's model list
+    preloadSelectedModel().catch(() => {});
     armNews();
     setTimeout(() => morningRainTip().catch(() => {}), 25000); // once her intro and welcome are done
     setTimeout(() => launch.launchables().catch(() => {}), 20000); // what she can open, before you ask
@@ -1349,7 +1416,11 @@ function main() {
     screen.on('display-removed', screensChanged);
     // after sleep or a locked screen, once Windows has settled
     powerMonitor.on('resume', () => setTimeout(rearmOverlay, 2000));
-    powerMonitor.on('unlock-screen', () => setTimeout(rearmOverlay, 1000));
+    powerMonitor.on('lock-screen', () => { screenLocked = true; });
+    powerMonitor.on('unlock-screen', () => {
+      screenLocked = false;
+      setTimeout(rearmOverlay, 1000);
+    });
   });
 
   app.on('will-quit', () => {

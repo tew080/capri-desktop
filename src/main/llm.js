@@ -83,8 +83,9 @@ async function models(id, cfg) {
   return id === 'gemini' ? geminiModels(names) : names;
 }
 
+// Loads the model ahead of the first message (Ollama only). Resolves true / false / null (nothing to load).
 function warm(id, model) {
-  if (PROVIDERS[id].kind === 'ollama') ollama.warm(model);
+  return PROVIDERS[id]?.kind === 'ollama' && model ? ollama.warm(model) : Promise.resolve(null);
 }
 
 // OpenAI-style streaming (server-sent events): onDelta(piece) as it comes, resolves with all of it.
