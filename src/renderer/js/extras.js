@@ -134,7 +134,7 @@ export const EXTRAS = {
   victoryOrbitCoolMs: 60_000,
   chronoRewindCoolMs: 20_000,
   // ── Daily spectacle ───────────────────────────────────────
-  melodyTickMs: 650,          // floating notes while media plays
+  melodyTickMs: 800,          // floating notes while media plays
   windowBreathMs: 2_800,      // edge pulse while perched
   handshakeCoolMs: 2_200,     // beam per successful tool
   edgeRestMargin: 0.14,       // rest/wander stays in side bands
@@ -3551,32 +3551,27 @@ export function installExtras(ctx) {
 
   // Media notes: driven by Windows SMTC playback status (works minimized),
   // not by whether the player window is visible.
-  const NOTE_GLYPHS = ['♪', '♫', '♩', '♬', '♪', '♫'];
+  // Notes are fx 'note' items (fx.js): smooth float + sway, hard-edged on a violet copy. Few, spaced
+  // out, alternating sides of her head so they never cover her face or pile up.
+  let noteSide = 1;
   const spawnNotes = (from, toward = null, strength = 1) => {
-    if (!fx || reducedMotion.matches) return;
-    const n = Math.max(3, Math.round(2.5 * strength + Math.random() * 2));
+    if (!fx?.note || reducedMotion.matches) return;
+    const s = capri?.scale || 1;
+    const n = strength >= 1.5 ? 3 : strength >= 1.1 ? 2 : 1;
     for (let i = 0; i < n; i++) {
-      const x = from.x + rand(-26, 26);
-      const y = from.y + rand(-10, 20);
-      fx.ring?.(x, y, { size: 0.1 + Math.random() * 0.08 });
-      fx.drift?.(x, y, -Math.PI / 2 + rand(-0.6, 0.6));
-      if (Math.random() < 0.65) fx.burst?.(x, y, { count: 4, power: 0.28, spread: 32 });
-      // always emit a note glyph
-      try {
-        fx.add?.({
-          type: 'glyph',
-          life: rand(1100, 1700),
-          x: x + rand(-8, 8),
-          y: y + rand(-6, 6),
-          text: pick(NOTE_GLYPHS),
-          drift: rand(-22, 22),
-          color: Math.random() < 0.5 ? (COLORS?.green || '#36ff7a') : (COLORS?.paper || '#fff4f6'),
-          note: true,
-        });
-      } catch { /* */ }
-      if (toward && Math.random() < 0.35) {
-        fx.streak?.(x, y, toward.x + rand(-30, 30), toward.y + rand(-20, 10), { life: 280 });
-      }
+      setTimeout(() => {
+        try {
+          if (!capri || capri.stowed || capri.dormant || capri.hidden || (capri.p?.alpha ?? 1) < 0.25) return;
+          let h;
+          try { h = capri.head(); } catch { h = from; }
+          noteSide = -noteSide;
+          const x = h.x + noteSide * rand(46, 78) * s;
+          const y = (h.top ?? h.y - 60 * s) + rand(10, 40) * s;
+          fx.note(x, y, { size: rand(13, 18) * Math.max(0.8, s) });
+          // now and then a shard of her mane drifts off with it, same language as the rest of her
+          if (Math.random() < 0.3) fx.drift?.(x, y, -Math.PI / 2 + rand(-0.5, 0.5));
+        } catch { /* */ }
+      }, i * rand(260, 420));
     }
   };
 
@@ -3597,8 +3592,8 @@ export function installExtras(ctx) {
       let from;
       try { from = capri.head(); }
       catch { from = { x: capri.pos?.x || 0, y: (capri.pos?.y || 0) - 40 }; }
-      // slightly stronger so notes are obvious
-      spawnNotes(from, null, 1.4);
+      // one or two notes per beat: enough to read as music, never a swarm
+      spawnNotes(from, null, Math.random() < 0.45 ? 1.2 : 1);
     } catch { /* */ }
   };
   setInterval(melodyTick, 500);
@@ -3662,8 +3657,33 @@ export function installExtras(ctx) {
     }
   }
 
+  // ── Face the pointer ─────────────────────────────────────────
+  // While she's free, she keeps turned toward your mouse: when it crosses to the other side of her
+  // (past a dead zone, so it doesn't flicker when the pointer is right above her) she does her
+  // turnaround. Nothing fights it: acts, moves, pointing, the satellite and sleep all take priority.
+  const FACE = { pollMs: 140, dead: 70, cool: 700 };
+  let lastFaceTurn = -Infinity;
+  setInterval(() => {
+    try {
+      if (!capri || capri.hidden || capri.stowed || capri.dormant) return;
+      if (capri.busy || capri.act || capri.dragging || capri.pointing || capri.sky || capri.flight) return;
+      if (!['stand', 'sit'].includes(capri.stance) || capri.mode === 'sleep') return;
+      if (chat?.open || guide?.running) return;
+      const m = getMouse?.();
+      if (!m) return;
+      const dx = m.x - capri.pos.x;
+      if (Math.abs(dx) < FACE.dead) return;
+      const wanted = dx < 0 ? 1 : -1; // facing 1: reaching left (as drawn)
+      if (wanted === capri.facing) return;
+      const now = performance.now();
+      if (now - lastFaceTurn < FACE.cool) return;
+      lastFaceTurn = now;
+      capri.perform?.('turn');
+    } catch { /* */ }
+  }, FACE.pollMs);
+
   // ── Edge helpers ───────────────────────────────────────────
-  const edgeMargin = () => Math.max(110, (capri?.view?.w || 1280) * 0.13);
+  const edgeMargin =() => Math.max(110, (capri?.view?.w || 1280) * 0.13);
   const floorY = () => capri?.floor ?? capri?.view?.floor ?? ((capri?.view?.h || 800) - 20);
   // ── User rest position (precise) ──────────────────────────────
   // Drag her where you want; that becomes her home until you move her again.

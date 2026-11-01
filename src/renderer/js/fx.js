@@ -383,7 +383,54 @@ export class FxLayer {
   }
 
   glyph(x, y) {
+    return; // floating characters removed
     this.add({ type: 'glyph', life: rand(900, 1400), x: x + rand(-40, 40), y, text: pick(GLYPHS), drift: rand(-12, 12) });
+  }
+
+  // A music note (she hears what you're playing): drawn as a hard-edged shape on its violet copy,
+  // floating up in one slow-out curve, swaying side to side, popping in with a little overshoot and
+  // fading out softly. Follows the clock every screen refresh (smooth), so it never steps.
+  // kind: 'eighth' | 'pair'; color: a COLORS value.
+  note(x, y, { kind = pick(['eighth', 'eighth', 'pair']), size = rand(13, 18), rise = rand(90, 140), life = rand(2000, 2700), color = pick([COLORS.paper, COLORS.paper, COLORS.green, COLORS.red]) } = {}) {
+    return this.add({
+      type: 'note', smooth: true, life, x, y, kind, size, rise, color,
+      sway: rand(7, 14), swing: rand(0.8, 1.4), phase: rand(0, Math.PI * 2), drift: rand(-26, 26), spin: rand(0.12, 0.26),
+    });
+  }
+
+  // The shape of a note, centred on its head, filled with the current fillStyle (s: its size in px).
+  noteShape(kind, s) {
+    const { ctx } = this;
+    const head = (hx, hy) => {
+      ctx.beginPath();
+      ctx.ellipse(hx, hy, s * 0.44, s * 0.31, -0.45, 0, Math.PI * 2);
+      ctx.fill();
+    };
+    const stem = (sx, top) => ctx.fillRect(sx - s * 0.06, top, s * 0.12, -top - s * 0.05);
+    const sx = s * 0.38;
+    if (kind === 'pair') {
+      const dx = s * 1.0, dy = s * 0.2;
+      head(0, 0);
+      head(dx, dy);
+      stem(sx, -s * 1.4);
+      stem(sx + dx, -s * 1.4 + dy);
+      ctx.beginPath(); // the beam joining the stems
+      ctx.moveTo(sx - s * 0.06, -s * 1.4);
+      ctx.lineTo(sx + dx + s * 0.06, -s * 1.4 + dy);
+      ctx.lineTo(sx + dx + s * 0.06, -s * 1.12 + dy);
+      ctx.lineTo(sx - s * 0.06, -s * 1.12);
+      ctx.closePath();
+      ctx.fill();
+      return;
+    }
+    head(0, 0);
+    stem(sx, -s * 1.4);
+    ctx.beginPath(); // the flag
+    ctx.moveTo(sx, -s * 1.4);
+    ctx.bezierCurveTo(sx + s * 0.1, -s * 0.95, sx + s * 0.8, -s * 1.0, sx + s * 0.58, -s * 0.42);
+    ctx.bezierCurveTo(sx + s * 0.62, -s * 0.9, sx + s * 0.18, -s * 0.86, sx, -s * 0.98);
+    ctx.closePath();
+    ctx.fill();
   }
 
   // One shard coming loose from the mane and floating away, slowly, outward and up.
@@ -2044,14 +2091,8 @@ export class FxLayer {
         ctx.save();
         ctx.globalAlpha = fade;
 
-        // the wire, dashes crawling toward it on twos, and data running down it
-        ctx.setLineDash([9, 6]);
-        ctx.lineDashOffset = -Math.floor(frame / 2) * 5;
-        const line = [[a.x, a.y], [ex, ey]];
-        this.stroke(line, COLORS.violet, 4, -2, 2);
-        this.stroke(line, COLORS.paper, 2);
-        ctx.setLineDash([]);
-        if (!back) {
+        // the wire and its running data are removed on request; only the reticle remains
+        if (false) {
           for (let i = 0; i < 3; i++) {
             const u = (Math.floor(frame / 2) * 0.06 + i / 3) % 1;
             if (u > grow) continue;
@@ -2060,20 +2101,6 @@ export class FxLayer {
             ctx.fillRect(Math.round(px) - 3, Math.round(py) - 1, 5, 5);
             ctx.fillStyle = i ? COLORS.green : COLORS.paper;
             ctx.fillRect(Math.round(px) - 2, Math.round(py) - 2, 5, 5);
-          }
-        }
-
-        if (grow >= 1 && !off) {
-          // arrowhead, with its violet copy
-          const ang = Math.atan2(b.y - a.y, b.x - a.x);
-          for (const [dx, dy, color] of [[-2, 2, COLORS.violet], [0, 0, COLORS.red]]) {
-            ctx.beginPath();
-            ctx.moveTo(b.x + dx, b.y + dy);
-            ctx.lineTo(b.x - Math.cos(ang - 0.45) * 16 + dx, b.y - Math.sin(ang - 0.45) * 16 + dy);
-            ctx.lineTo(b.x - Math.cos(ang + 0.45) * 16 + dx, b.y - Math.sin(ang + 0.45) * 16 + dy);
-            ctx.closePath();
-            ctx.fillStyle = color;
-            ctx.fill();
           }
         }
 
@@ -2118,16 +2145,6 @@ export class FxLayer {
           const px = clamp(it.rect.x + it.rect.w / 2, 14, vw - 14) - off[0] * (14 + bob);
           const py = clamp(it.rect.y + it.rect.h / 2, 14, vh - 14) - off[1] * (14 + bob);
           tagAt = { x: px - off[0] * 50, y: py - off[1] * 30 };
-          const ang2 = Math.atan2(off[1], off[0]);
-          for (const [dx, dy, color] of [[-2, 2, COLORS.violet], [0, 0, flash ? COLORS.paper : COLORS.red]]) {
-            ctx.beginPath();
-            ctx.moveTo(px + Math.cos(ang2) * 13 + dx, py + Math.sin(ang2) * 13 + dy);
-            ctx.lineTo(px + Math.cos(ang2 + 2.4) * 13 + dx, py + Math.sin(ang2 + 2.4) * 13 + dy);
-            ctx.lineTo(px + Math.cos(ang2 - 2.4) * 13 + dx, py + Math.sin(ang2 - 2.4) * 13 + dy);
-            ctx.closePath();
-            ctx.fillStyle = color;
-            ctx.fill();
-          }
         }
 
         // the word, on a red tag: at the reticle's top corner (under it at the top of the screen),
@@ -2145,6 +2162,34 @@ export class FxLayer {
           ctx.fillStyle = COLORS.paper;
           ctx.fillText(it.label, tx + 7, ty + 13.5);
         }
+        ctx.restore();
+        break;
+      }
+      case 'note': {
+        const out = 1 - Math.pow(1 - t, 2.2); // rises fast, then slows as it fades
+        const grow = t < 0.14 ? t / 0.14 : 1;
+        // pops in with a small overshoot, then shrinks a touch as it fades
+        const pop = grow < 1 ? 0.6 + 0.4 * grow + 0.14 * Math.sin(grow * Math.PI) : 1 - (0.12 * Math.max(0, t - 0.6)) / 0.4;
+        const alpha = Math.min(1, t / 0.12) * (t > 0.6 ? Math.pow(1 - (t - 0.6) / 0.4, 1.4) : 1);
+        if (alpha <= 0.01) break;
+        const wave = Math.sin(it.phase + t * it.swing * Math.PI * 2);
+        const px = it.x + it.drift * out + wave * it.sway * Math.min(1, t * 3);
+        const py = it.y - it.rise * out;
+        const rot = Math.cos(it.phase + t * it.swing * Math.PI * 2) * it.spin; // leans into each sway
+        const s = it.size * pop;
+        ctx.save();
+        ctx.translate(px, py);
+        ctx.rotate(rot);
+        ctx.globalAlpha = alpha;
+        // violet copy, offset, then the note itself (same registration as everything else of hers)
+        ctx.save();
+        ctx.translate(-2, 2);
+        ctx.fillStyle = COLORS.violet;
+        this.noteShape(it.kind, s);
+        ctx.restore();
+        ctx.fillStyle = it.color;
+        this.noteShape(it.kind, s);
+        if (t < 0.22) this.sparkle(s * 0.9, -s * 1.5, s * 0.55 * (1 - t / 0.22), COLORS.paper); // a glint as it appears
         ctx.restore();
         break;
       }
