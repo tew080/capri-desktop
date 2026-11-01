@@ -118,6 +118,8 @@ export class Capri {
     this.canCross = null; // (side, y) => is there another screen past that side's edge, at that height
     this.onCross = null;  // async (side, at) => moves her window over to it: { y } there, or null
     this.onScreenOf = null; // async (cursor) => her window moved to the screen the pointer is on: the pointer there
+    this.onPlaced = null; // ({ x, y, face }) after user soft-drops her — extras uses this as rest home
+    this.homePos = null;  // last place the user put her: { x, y, face }
 
     this.alphaMap = this.buildAlphaMap(image);
     this.hull = buildHull(this.alphaMap);
@@ -389,11 +391,33 @@ export class Capri {
 
   // Back to where she rests: her corner, or sitting on the taskbar below it.
   goHome() {
-    const post = this.spot('post');
-    if (this.restOn !== 'taskbar') return this.teleport(post);
-    if (this.stance === 'sit' && this.perch?.id === 'taskbar') return Promise.resolve();
-    // left of the clock and the tray icons, right of the middle (the app icons, on Windows 11)
-    return this.sitOn({ win: this.ledge(), dx: clamp(this.view.w - 440, this.view.w * 0.6, post.x) });
+    const home = this.homePos;
+    // Taskbar rest: SIT on the taskbar — use the X the user last placed, else far right
+    if (this.restOn === 'taskbar') {
+      if (this.stance === 'sit' && this.perch?.id === 'taskbar') {
+        // already sitting — if user moved home X, slide along the ledge
+        if (home && typeof home.x === 'number') {
+          const dx = clamp(home.x, 60, this.view.w - 60);
+          if (this.perch && Math.abs((this.perch.dx || 0) - dx) > 24) {
+            this.perch = { id: 'taskbar', dx };
+            this.pos = this.seat(this.ledge(), dx);
+            this.place();
+          }
+        }
+        return Promise.resolve();
+      }
+      const dx = (home && typeof home.x === 'number')
+        ? clamp(home.x, 60, this.view.w - 60)
+        : clamp(this.view.w - 200, this.view.w * 0.72, this.view.w - 80);
+      return this.sitOn({ win: this.ledge(), dx });
+    }
+    // Corner / free place: stand at the exact spot the user put her
+    if (home && typeof home.x === 'number' && typeof home.y === 'number') {
+      const face = home.face === -1 ? -1 : home.face === 1 ? 1 : null;
+      return this.teleport({ x: home.x, y: home.y }, { face });
+    }
+    const side = 150 * this.scale + 30;
+    return this.teleport({ x: this.view.w - side - 30, y: this.floor });
   }
 
   pickSeat({ frontOnly = false, except = null } = {}) {
@@ -1777,9 +1801,35 @@ export class Capri {
         this.throwHer(v.x, v.y); // the panel stays away until she's back to herself
         return;
       }
-      this.setStance('stand'); // upright again, under where you held her
+      // Remember where the user released her BEFORE drop() sits/falls
+      // (window ledges must not steal a deliberate floor placement — left or right)
+      let placed = {
+        x: clamp(this.pos.x, 24, this.view.w - 24),
+        y: clamp(this.pos.y, SPRITE.height * this.scale * 0.5, this.floor),
+        face: this.facing,
+      };
+      // Near the floor → treat as floor stand (don't sit on a titlebar by accident)
+      const nearFloor = placed.y >= this.floor - 48;
+      if (nearFloor) placed = { ...placed, y: this.floor };
+      this.setStance('stand');
       this.onTeleport?.('end');
-      this.drop();
+      this.pos = { x: placed.x, y: placed.y };
+      this.facing = placed.face;
+      this.place();
+      this.homePos = placed;
+      try { this.onPlaced?.(placed); } catch { /* */ }
+      if (nearFloor) {
+        // stay standing exactly where released
+        this.perform('land');
+      } else {
+        this.drop();
+        // if still standing after drop, restore exact place (drop may have nudged)
+        if (this.stance === 'stand' && !this.flight) {
+          this.pos = { x: placed.x, y: placed.y };
+          this.facing = placed.face;
+          this.place();
+        }
+      }
     });
   }
 

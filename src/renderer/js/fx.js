@@ -2150,7 +2150,9 @@ export class FxLayer {
       }
       case 'glyph': {
         ctx.save();
-        ctx.font = '600 11px "JetBrains Mono", monospace';
+        ctx.font = it.note
+          ? '600 16px "Segoe UI Symbol", "Segoe UI Emoji", "Apple Color Emoji", "Noto Sans Symbols", sans-serif'
+          : '600 11px "JetBrains Mono", monospace';
         ctx.globalAlpha = t < 0.15 ? t / 0.15 : 1 - (t - 0.15) / 0.85;
         // stepped rise: whole pixels, every frame
         const y = Math.round(it.y - t * 46);

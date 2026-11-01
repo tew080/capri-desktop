@@ -28,7 +28,12 @@ function startWindowWatch({ overlay, onUpdate }) {
 
   const toOverlay = (win, bounds) => {
     const dip = screen.screenToDipRect(null, { x: win.x, y: win.y, width: win.w, height: win.h });
-    return { id: win.id, x: dip.x - bounds.x, y: dip.y - bounds.y, w: dip.width, h: dip.height, max: win.max };
+    return {
+      id: win.id,
+      x: dip.x - bounds.x, y: dip.y - bounds.y, w: dip.width, h: dip.height,
+      max: win.max,
+      proc: win.proc || null,
+    };
   };
 
   // the snapshot as seen from her window, wherever it is now
@@ -41,7 +46,9 @@ function startWindowWatch({ overlay, onUpdate }) {
       .filter((w) => w.x < bounds.width && w.x + w.w > 0 && w.y < bounds.height && w.y + w.h > 0);
     onUpdate({
       fg: last.fg, taskbar: Boolean(last.taskbar), ai: Array.isArray(last.ai) ? last.ai : [],
-      game: last.game || null, usb: Array.isArray(last.usb) ? last.usb : [], plug: last.plug || null, wins,
+      game: last.game || null, proc: last.proc || null,
+      media: last.media || null,
+      usb: Array.isArray(last.usb) ? last.usb : [], plug: last.plug || null, wins,
     });
   };
 

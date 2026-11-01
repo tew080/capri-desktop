@@ -171,18 +171,84 @@ public static class CapriWindows {
       var best = Best(plugged ? added : removed);
       if (best == null) return;
       plugs++;
-      plug = "{\"n\":" + plugs + ",\"in\":" + (plugged ? "true" : "false") + ",\"name\":" + Json(best[0]) + ",\"class\":" + Json(best[1]) + "}";
+      string kind = KindOf(best[1], best[0]);
+      plug = "{\"n\":" + plugs + ",\"in\":" + (plugged ? "true" : "false") + ",\"name\":" + Json(best[0]) + ",\"class\":" + Json(best[1]) + ",\"kind\":" + Json(kind) + "}";
     }
   }
 
   // The device that says the most about what was plugged: "Galaxy S21" rather than "USB Composite Device".
   static readonly Regex VAGUE = new Regex(@"composite|hub|concentrateur|input device|hid|mass storage|stockage|g.n.ri|virtu|num.rat|interface|host|h.te|bus|port|endpoint|service|profil|protocol|p.riph.rique|dispositivo", RegexOptions.IgnoreCase); // ASCII only: PowerShell reads this file as ANSI
-  public static string[] Best(List<string[]> list) {
+  public static string KindOf(string cls, string name) {
+    string c = cls ?? "";
+    string n = name ?? "";
+    string both = (c + " " + n);
+
+    if (c == "Bluetooth" || both.IndexOf("Bluetooth", System.StringComparison.OrdinalIgnoreCase) >= 0) return "bluetooth";
+
+    // Storage first — flash drives, disks, mass storage (before WPD→phone)
+    if (c == "DiskDrive" || c == "CDROM" || c == "SCSIAdapter"
+        || both.IndexOf("Mass Storage", System.StringComparison.OrdinalIgnoreCase) >= 0
+        || both.IndexOf("USB Drive", System.StringComparison.OrdinalIgnoreCase) >= 0
+        || both.IndexOf("Flash", System.StringComparison.OrdinalIgnoreCase) >= 0
+        || both.IndexOf("Thumb", System.StringComparison.OrdinalIgnoreCase) >= 0
+        || both.IndexOf("Sandisk", System.StringComparison.OrdinalIgnoreCase) >= 0
+        || both.IndexOf("Kingston", System.StringComparison.OrdinalIgnoreCase) >= 0
+        || both.IndexOf("Transcend", System.StringComparison.OrdinalIgnoreCase) >= 0
+        || both.IndexOf("USB Disk", System.StringComparison.OrdinalIgnoreCase) >= 0
+        || both.IndexOf("Removable Disk", System.StringComparison.OrdinalIgnoreCase) >= 0) return "storage";
+
+    // Phones / tablets only when name/class clearly says so
+    bool phoneHint =
+      c == "AndroidUsbDeviceClass"
+      || both.IndexOf("Android", System.StringComparison.OrdinalIgnoreCase) >= 0
+      || both.IndexOf("Phone", System.StringComparison.OrdinalIgnoreCase) >= 0
+      || both.IndexOf("iPhone", System.StringComparison.OrdinalIgnoreCase) >= 0
+      || both.IndexOf("iPad", System.StringComparison.OrdinalIgnoreCase) >= 0
+      || both.IndexOf("Galaxy", System.StringComparison.OrdinalIgnoreCase) >= 0
+      || both.IndexOf("Pixel", System.StringComparison.OrdinalIgnoreCase) >= 0
+      || both.IndexOf("OnePlus", System.StringComparison.OrdinalIgnoreCase) >= 0
+      || both.IndexOf("Xiaomi", System.StringComparison.OrdinalIgnoreCase) >= 0
+      || both.IndexOf("Huawei", System.StringComparison.OrdinalIgnoreCase) >= 0
+      || both.IndexOf("OPPO", System.StringComparison.OrdinalIgnoreCase) >= 0
+      || both.IndexOf("vivo", System.StringComparison.OrdinalIgnoreCase) >= 0
+      || both.IndexOf("Apple Mobile", System.StringComparison.OrdinalIgnoreCase) >= 0
+      || both.IndexOf("MTP", System.StringComparison.OrdinalIgnoreCase) >= 0;
+    if (phoneHint) return "phone";
+    // Generic WPD without phone hint → portable device, not phone
+    if (c == "WPD") return "storage";
+
+    if (c == "AudioEndpoint" || c == "MEDIA"
+        || both.IndexOf("Headset", System.StringComparison.OrdinalIgnoreCase) >= 0
+        || both.IndexOf("Headphone", System.StringComparison.OrdinalIgnoreCase) >= 0
+        || both.IndexOf("Earphone", System.StringComparison.OrdinalIgnoreCase) >= 0
+        || both.IndexOf("Speaker", System.StringComparison.OrdinalIgnoreCase) >= 0) return "audio";
+    if (c == "Camera" || c == "Image") return "camera";
+    if (c == "Keyboard" || (c == "HIDClass" && both.IndexOf("Keyboard", System.StringComparison.OrdinalIgnoreCase) >= 0)) return "keyboard";
+    if (c == "Mouse" || (c == "HIDClass" && both.IndexOf("Mouse", System.StringComparison.OrdinalIgnoreCase) >= 0)) return "mouse";
+    if (c == "HIDClass" || c == "USB") {
+      if (both.IndexOf("Controller", System.StringComparison.OrdinalIgnoreCase) >= 0
+          || both.IndexOf("Gamepad", System.StringComparison.OrdinalIgnoreCase) >= 0
+          || both.IndexOf("Joystick", System.StringComparison.OrdinalIgnoreCase) >= 0) return "gamepad";
+    }
+    if (c.IndexOf("USB", System.StringComparison.OrdinalIgnoreCase) >= 0
+        || n.IndexOf("USB", System.StringComparison.OrdinalIgnoreCase) >= 0) return "usb";
+    return "device";
+  }
+
+  static string[] Best(List<string[]> list) {
     string[] best = null;
     int top = int.MinValue;
     foreach (var d in list) {
       if (d[0] == "") continue;
-      int score = d[1] == "WPD" ? 6 : d[1] == "AudioEndpoint" ? 5 : d[1] == "Camera" || d[1] == "Image" ? 4 : d[1] == "HIDClass" || d[1] == "Keyboard" || d[1] == "Mouse" ? 3 : d[1] == "Bluetooth" ? 2 : 1;
+      string c = d[1];
+      int score = c == "WPD" ? 7
+        : c == "DiskDrive" ? 6
+        : c == "AudioEndpoint" || c == "MEDIA" ? 6
+        : c == "Bluetooth" ? 6
+        : c == "Camera" || c == "Image" ? 5
+        : c == "HIDClass" || c == "Keyboard" || c == "Mouse" ? 4
+        : c == "USB" ? 3
+        : 1;
       if (VAGUE.IsMatch(d[0])) score -= 4;
       if (score > top) { top = score; best = d; }
     }
@@ -196,13 +262,16 @@ public static class CapriWindows {
     GetClassName(fg, fgClass, 64);
     // the taskbar clicked: it comes up over her (Windows has no levels among windows on top)
     bool taskbar = fgClass.ToString() == "Shell_TrayWnd" || fgClass.ToString() == "Shell_SecondaryTrayWnd";
+    Program(fg);
     sb.Append("{\"fg\":").Append(fg.ToInt64()).Append(",\"taskbar\":").Append(taskbar ? "true" : "false")
       .Append(",\"ai\":").Append(Ai(fg))
       .Append(",\"game\":").Append(game == "" ? "null" : Json(game))
+      .Append(",\"proc\":").Append(proc == "" ? "null" : Json(proc))
       .Append(",\"usb\":").Append(Usb());
     lock (gate) sb.Append(",\"plug\":").Append(plug);
     sb.Append(",\"wins\":[");
     int count = 0;
+    var procCache = new Dictionary<uint, string>();
     EnumWindows((h, l) => {
       if (count >= 40) return false;
       if (h.ToInt64() == self || !IsWindowVisible(h) || IsIconic(h)) return true;
@@ -217,12 +286,20 @@ public static class CapriWindows {
       RECT r;
       if (DwmGetWindowAttribute(h, DWMWA_EXTENDED_FRAME_BOUNDS, out r, 16) != 0) return true;
       if (r.Right - r.Left < 200 || r.Bottom - r.Top < 120) return true;
+      uint pid; GetWindowThreadProcessId(h, out pid);
+      string pname = "";
+      if (!procCache.TryGetValue(pid, out pname)) {
+        try { pname = System.Diagnostics.Process.GetProcessById((int)pid).ProcessName.ToLowerInvariant(); }
+        catch { pname = ""; }
+        procCache[pid] = pname;
+      }
       if (count > 0) sb.Append(',');
       count++;
       sb.Append("{\"id\":").Append(h.ToInt64())
         .Append(",\"x\":").Append(r.Left).Append(",\"y\":").Append(r.Top)
         .Append(",\"w\":").Append(r.Right - r.Left).Append(",\"h\":").Append(r.Bottom - r.Top)
-        .Append(",\"max\":").Append(IsZoomed(h) ? "true" : "false").Append('}');
+        .Append(",\"max\":").Append(IsZoomed(h) ? "true" : "false")
+        .Append(",\"proc\":").Append(pname == "" ? "null" : Json(pname)).Append('}');
       return true;
     }, IntPtr.Zero);
     sb.Append("]}");
@@ -232,16 +309,133 @@ public static class CapriWindows {
 "@
 
 [CapriWindows]::Init()
+
+$script:mediaJson = '{"on":false,"app":"","running":false}'
+$script:mediaAt = 0
+$script:mediaLastLog = ''
+function Update-CapriMedia {
+  $now = [Environment]::TickCount
+  if ($script:mediaAt -ne 0 -and (($now - $script:mediaAt) -band 0x7fffffff) -lt 1000) { return }
+  $script:mediaAt = $now
+
+  # 1) Media apps by process name OR window title (minimized OK)
+  $running = $false
+  $runningApp = ''
+  # process-name patterns (lowercase)
+  $procPat = 'spotify|spotifywebhelper|vlc|foobar|itunes|applemusic|apple.?music|potplayer|wmplayer|aimp|tidal|deezer|musicbee|winamp|clementine|mediamonkey|groove|music\.ui|youtubemusic|youtube.?music|qqmusic|netease|soundcloud|bandcamp|pandora|amazon.?music|amazonmusic|dopamine|quodlibet|rhythmbox|elisa|lollypop|strawberry|resonic|jetAudio|kmplayer|mpc-hc|mpc-be|mpv|gom|splayer|potplayermini|musicplayer|jukebox|zune|media.?player|filmora|premiere|audacity|obs|discord|chrome|msedge|brave|firefox|opera|vivaldi'
+  # window-title patterns — only used when process is a known browser OR title clearly media
+  $titlePat = '(?i)youtube\s*music|youtube|spotify|vlc media|foobar2000|groove music|apple music|itunes|tidal|deezer|soundcloud|bandcamp|netflix|disney\+|disney plus|prime video|twitch|bilibili|niconico|joox|kkbox|line.?music|melon|genie|bugs|amazon music|pandora|mixcloud|hearthis|audius|yt.?music'
+  try {
+    foreach ($p in (Get-Process -ErrorAction SilentlyContinue)) {
+      $low = ([string]$p.ProcessName).ToLower()
+      $title = [string]$p.MainWindowTitle
+      $hit = $false
+      # dedicated media player process
+      if ($low -match 'spotify|spotifywebhelper|vlc|foobar|itunes|applemusic|potplayer|wmplayer|aimp|tidal|deezer|musicbee|winamp|clementine|mediamonkey|groove|music\.ui|youtubemusic|youtube.?music|qqmusic|netease|soundcloud|bandcamp|pandora|amazonmusic|dopamine|mpv|gom|kmplayer|mpc-hc|mpc-be|jetAudio|resonic|zune|joox|kkbox') {
+        $hit = $true
+        $runningApp = $low
+      }
+      # browser / electron shell only counts when title looks like media
+      elseif ($title -and ($low -match 'chrome|msedge|brave|firefox|opera|vivaldi|electron') -and ($title -match $titlePat)) {
+        $hit = $true
+        $runningApp = $low
+      }
+      # any process whose title is clearly a media app (PWA etc.)
+      elseif ($title -and ($title -match '(?i)youtube\s*music|spotify|vlc media|foobar2000|groove music|apple music|tidal|deezer|joox|kkbox|line.?music|netflix|prime video')) {
+        $hit = $true
+        $runningApp = if ($low) { $low } else { 'media' }
+      }
+      if ($hit) { $running = $true; break }
+    }
+  } catch {}
+
+  # 2) SMTC (optional — on this machine it may throw; that's ok)
+  $playing = $null
+  $app = $runningApp
+  $smtcStatus = -1
+  $smtcSessions = 0
+  try {
+    Add-Type -AssemblyName System.Runtime.WindowsRuntime -ErrorAction SilentlyContinue | Out-Null
+    $null = [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager, Windows.Media.Control, ContentType = WindowsRuntime]
+    $asTask = [System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
+      $_.Name -eq 'AsTask' -and $_.IsGenericMethod -and $_.GetParameters().Count -eq 1
+    } | Select-Object -First 1
+    $req = [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager]::RequestAsync()
+    if ($asTask) {
+      $generic = $asTask.MakeGenericMethod([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager])
+      $task = $generic.Invoke($null, @($req))
+      $mgr = $task.GetAwaiter().GetResult()
+    } else {
+      $mgr = $req.GetAwaiter().GetResult()
+    }
+    if ($null -ne $mgr) {
+      $list = @()
+      try { $list = @($mgr.GetSessions()) } catch {}
+      if ($list.Count -eq 0) {
+        try {
+          $cur = $mgr.GetCurrentSession()
+          if ($null -ne $cur) { $list = @($cur) }
+        } catch {}
+      }
+      $smtcSessions = @($list).Count
+      $anyPlaying = $false
+      $anyPaused = $false
+      foreach ($session in $list) {
+        if ($null -eq $session) { continue }
+        try {
+          $status = [int]$session.GetPlaybackInfo().PlaybackStatus
+          $smtcStatus = $status
+          if ($status -eq 4) {
+            $anyPlaying = $true
+            try {
+              $id = [string]$session.SourceAppUserModelId
+              if ($id) {
+                if ($id.Length -gt 60) { $id = $id.Substring(0, 60) }
+                $app = $id.Replace('\', '\\').Replace('"', '\"')
+              }
+            } catch {}
+          } elseif ($status -eq 5 -or $status -eq 3) {
+            $anyPaused = $true
+          }
+        } catch {}
+      }
+      if ($anyPlaying) { $playing = $true }
+      elseif ($anyPaused -and $smtcSessions -gt 0) { $playing = $false }
+    }
+  } catch {
+    $smtcStatus = -2
+  }
+
+  # 3) Decide — prefer SMTC when it works; otherwise process/title detection
+  if ($playing -eq $true) { $on = $true }
+  elseif ($playing -eq $false) { $on = $false }
+  else { $on = $running }
+
+  $onStr = if ($on) { 'true' } else { 'false' }
+  $runStr = if ($running) { 'true' } else { 'false' }
+  if (-not $app) { $app = '' }
+  $script:mediaJson = "{`"on`":$onStr,`"app`":`"$app`",`"running`":$runStr,`"smtc`":$smtcStatus,`"sessions`":$smtcSessions}"
+
+  if ($script:mediaJson -ne $script:mediaLastLog) {
+    $script:mediaLastLog = $script:mediaJson
+    [Console]::Error.WriteLine("media $script:mediaJson")
+  }
+}
+
 $last = ''
 $tick = 0
+Update-CapriMedia
 while ($true) {
+  if ($tick % 6 -eq 0) { Update-CapriMedia }
   $snap = [CapriWindows]::Snapshot($Self)
+  if ($snap.EndsWith('}')) {
+    $snap = $snap.Substring(0, $snap.Length - 1) + ',"media":' + $script:mediaJson + '}'
+  }
   if ($snap -ne $last) {
     [Console]::Out.WriteLine($snap)
     [Console]::Out.Flush()
     $last = $snap
   }
-  # stop with Capri, even if she crashed without telling us
   $tick++
   if ($ParentPid -and ($tick % 20 -eq 0) -and -not (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue)) { break }
   Start-Sleep -Milliseconds 150

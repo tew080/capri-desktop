@@ -30,6 +30,9 @@ export class Brain {
     this.onLinked = null;
     this.onShowcase = null; // the demo's second half (app.js)
     this.onTalk = null;     // opens a chat with her (app.js, chat.js)
+    this.onError = null;    // extras Error Hunter (tool/stop failure)
+    this.onRival = null;    // another assistant's hooks (Codex/Agy) while she watches Claude
+    this.onWorkDone = null; // a real task finished (Stop with work)
     this.watching = true;   // she follows Claude Code (her menu; off, she just keeps you company)
     this.thinkTimer = 0;
     this.thinking = null;   // { s, since, said, fidget, gazed } while Claude is quiet mid-task
@@ -234,6 +237,18 @@ export class Brain {
       log: [action, { verb: '✕', target: clip(firstLine, 70), error: true }],
       hold: 5500,
     });
+    // cinematic: Error Hunter
+    try {
+      this.onError?.({
+        kind: 'tool',
+        tool: evt.tool_name || '',
+        detail: firstLine || String(evt.error || ''),
+        session: s.id,
+        session_id: s.id,
+        project: s.project,
+        demo: !!evt.demo,
+      });
+    } catch { /* */ }
   }
 
   async onNotification(evt, s) {
@@ -280,6 +295,18 @@ export class Brain {
     if (wasWorking || s.count) {
       this.tally(evt)?.done({ files: s.files.size, ms: s.taskStart ? Date.now() - s.taskStart : 0, project: s.project });
       if (!evt.demo) this.bond?.add('claude', 1); // work done together
+      if (!evt.demo && wasWorking) {
+        try {
+          this.onWorkDone?.({
+            count: s.count,
+            files: s.files.size,
+            ms: s.taskStart ? Date.now() - s.taskStart : 0,
+            project: s.project,
+            session_id: s.id,
+            demo: !!evt.demo,
+          });
+        } catch { /* */ }
+      }
     }
 
     if (!this.busySessions.length) {
@@ -335,6 +362,17 @@ export class Brain {
     this.voice.play('error');
     const detail = evt.error || evt.message || '';
     this.say('error', pick(this.t.crashed), s, { face: 'wide', quote: clip(String(detail), 120), hold: 9000 });
+    try {
+      this.onError?.({
+        kind: 'stop',
+        tool: '',
+        detail: String(detail),
+        session: s.id,
+        session_id: s.id,
+        project: s.project,
+        demo: !!evt.demo,
+      });
+    } catch { /* */ }
   }
 
   onSubagent(evt, s, starting) {

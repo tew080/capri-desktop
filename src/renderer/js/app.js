@@ -16,7 +16,7 @@ import { Pc } from './pc.js';
 import { Tts, SAMPLE } from './tts.js';
 import { linesFor } from './lines.js';
 import { pick, fmt, reducedMotion } from './util.js';
-import { installExtras } from './extras.js';
+import { installExtras, bootPayload } from './extras.js';
 
 const host = window.host;
 
@@ -264,7 +264,7 @@ async function boot() {
   jealousy.enabled = config.jealous !== false;
   chat.jealousy = jealousy;
   brain.onRival = (key) => jealousy.onRivalEvent(key);
-  // Jealous graffiti on the rival window (possess text)
+  // Possess eyes only during real jealousy (Jealousy.act → capri.jealous)
   {
   }
   const reminders = new Reminders({ host, list: config.reminders || [] });
@@ -280,18 +280,66 @@ async function boot() {
   let wantsOut = config.visible !== false; // not put away in your settings (Ctrl+Alt+C, her menu)
   pc.wantsOut = () => wantsOut;
 
-  // PC reactions only: plug/unplug + CPU hot
+  // Daily extras: vitals, smart break, clipboard mood, window companion,
+  // soft jealousy, morning ritual, multi-monitor polish, battery ritual…
   const extras = installExtras({
     capri, panel, brain, bond, chat, look, fx, launch: null, host, tts, pc, voice,
+    jealousy, guide,
+    getMouse: () => mouse,
   });
 
-  // Clicking her: what's going on, or she offers to talk. Sulking, she turns her back on you.
-  capri.onClick = () => {
-    if (panel.visible) panel.hide();
-    else if (!jealousy.onClick()) {
-      brain.status();
-      bond.add('click', 1);
+  // Clear stuck FX when she stows / on demand
+  {
+    const prevStow = capri.onStow;
+    capri.onStow = (...args) => {
+      try { prevStow?.(...args); } catch { /* */ }
+      try { extras?.clearFxResidue?.(); } catch { /* */ }
+    };
+  }
+
+  // ── Real Claude events → cinematic pack ─────────────────────
+  brain.onError = (info) => {
+    const detail = [info?.tool, info?.detail].filter(Boolean).join(': ').slice(0, 120);
+    try { extras?.onErrorEvent?.(detail || info?.kind || 'error'); } catch { /* */ }
+    // demo: hunter/storm residue off quickly
+    if (info?.demo || info?.session_id === 'demo-session') {
+      setTimeout(() => { try { extras?.clearFxResidue?.(); } catch { /* */ } }, 600);
     }
+  };
+  brain.onWorkDone = (info) => {
+    try {
+      if ((info?.count || 0) >= 3) {
+        extras?.pushMemory?.(
+          'work',
+          brain.lang === 'th'
+            ? `งาน ${info.project || ''} จบ · ${info.count} actions`
+            : `Finished ${info.project || 'task'} · ${info.count} actions`,
+          'laugh',
+        );
+      }
+      // Spectacle: victory orbit / ascension on big jobs
+      extras?.onSpectacleWorkDone?.(info);
+      // demo sessions wipe fast; normal jobs a bit later
+      const ms = info?.demo || info?.session_id === 'demo-session' ? 900 : 4500;
+      setTimeout(() => { try { extras?.clearFxResidue?.(); } catch { /* */ } }, ms);
+    } catch { /* */ }
+  };
+  // Rival assistant hooks while she watches Claude → soft duel path
+  const prevRival = brain.onRival;
+  brain.onRival = (source) => {
+    try { prevRival?.(source); } catch { /* */ }
+    // jealousy system already handles bond; cinematic duel when free
+    try {
+      if (extras?.rivalDuel && Math.random() < 0.5) extras.rivalDuel();
+    } catch { /* */ }
+  };
+
+  // Clicking her: panel toggle + jealousy. Vitals shown on hover (extras.js ── 2).
+  capri.onClick = () => {
+    if (panel.visible) { panel.hide(); return; }
+    if (jealousy.onClick()) return;
+    brain.status();
+    bond.add('click', 1);
   };
 
   // Thrown around (capri.js throwHer): she says how it was. The first time she's shaken (or she
@@ -338,11 +386,14 @@ async function boot() {
     }
     if (feel && bond.feeling !== 'angry') bond.feel(feel);
     panel.say({ kind: 'info', face, line, hold: 3800 });
+    // Wow: window glitch / crack on impact
+    try { extras?.glitchOnThrow?.({ how, hard }); } catch { /* */ }
   };
   // you said sorry in her chat: she lets it go (and lets you pick her up again)
   bond.onCalm = () => {
     jealousy.forgive();
     capri.refuseUntil = 0;
+    try { extras?.pushMemory?.('calm', brain.lang === 'th' ? 'เธอขอโทษ… ฉันวางแล้ว' : 'You said sorry. I let it go.', 'smug'); } catch { /* */ }
   };
   capri.onDodge = () => panel.say({ kind: 'info', face: 'smug', line: pick(brain.t.thrown.dodge), hold: 2500 });
 
@@ -352,6 +403,13 @@ async function boot() {
   bond.onStage = (stage) => {
     newStage = stage;
     capri.fondness = stage;
+    try {
+      extras?.pushMemory?.(
+        'stage',
+        brain.lang === 'th' ? `ซิงก์ระดับ ${stage}` : `Sync stage ${stage}`,
+        stage >= 3 ? 'laugh' : 'look',
+      );
+    } catch { /* */ }
   };
   const quiet = () => !capri.busy && !capri.act && !capri.dragging && !capri.stowed && !capri.dormant && !capri.hidden
     && capri.mode !== 'alert' && !chat.open && !guide.running && !panel.visible && ['stand', 'sit'].includes(capri.stance);
@@ -467,72 +525,67 @@ async function boot() {
   brain.onShowcase = async () => {
     const t = brain.t.showcase;
     const caption = (line) => panel.say({ kind: 'info', line, hold: 2200 });
+    const wipe = () => { try { extras?.clearFxResidue?.(); } catch { /* */ } };
+    // demo mode: extras shortens FX life + auto-wipe
+    try { extras?.setDemoMode?.(true); } catch { /* */ }
     capri.nextMove = capri.nextGaze = performance.now() + 120000; // nothing of her own in between
     if (capri.stowed) await capri.unstow();
     if (capri.dormant) capri.wake();
     await until(free);
     panel.hide();
+    wipe();
 
     caption(t.minds);
     await wait(1000);
     await capri.perform('split');
-    await wait(900);
+    await wait(500);
+    wipe(); // split/gestalt residue off fast
+    await wait(400);
 
     caption(t.zap);
-    await wait(1000);
+    await wait(800);
     const h = capri.head();
     capri.zap(h.x + capri.towardCenter() * 280, h.y - 170);
-    await wait(1800);
+    await wait(1200);
+    wipe();
 
     panel.hide();
     if (capri.gaze({ big: true })) await until(() => !capri.sky);
-    await wait(2500);
-
-    // a little terminal opens for her to take over, and closes under her once she's done with it
-    if (capri.possessWindows && (await host.demoWindow(true))) {
-      const top = () => capri.windows.wins.find((w) => capri.canSit(w)); // it opens on top of everything
-      await until(top, 4000);
-      const win = top();
-      const seat = win && { win, dx: win.w * 0.4 };
-      if (seat) {
-        panel.hide();
-        await capri.sitOn(seat);
-        await until(free);
-        caption(t.possess);
-        await wait(1400);
-        panel.hide();
-        await capri.possess();
-        await wait(1800);
-      }
-      host.demoWindow(false);
-      await wait(400);
-      await until(free); // she may have fallen off it
-      await wait(900);
-    }
-
-    caption(t.sleep);
-    await wait(1400);
-    panel.hide();
-    capri.setMode('sleep');
-    await wait(2500); // dozing off
-    await capri.doze();
-    await wait(4500);
-    capri.wake();
-    await until(free);
+    wipe(); // ascension / uplink particles
     await wait(1200);
 
+    // Possess is reserved for real jealousy only (no demo possess / eyes).
+
+    caption(t.sleep);
+    await wait(1000);
+    panel.hide();
+    wipe();
+    capri.setMode('sleep');
+    await wait(2000); // dozing off
+    await capri.doze();
+    await wait(3500);
+    wipe();
+    capri.wake();
+    await until(free);
+    await wait(800);
+
     caption(t.chip);
-    await wait(1600);
+    await wait(1200);
     panel.hide();
     await capri.stow();
-    await wait(3500);
+    wipe();
+    await wait(2800);
     await capri.unstow();
-    await wait(600);
+    await wait(400);
+    wipe(); // glass-world residue
     panel.say({ kind: 'info', line: t.end, hold: 5000 });
+    await wait(200);
+    wipe();
+    try { extras?.setDemoMode?.(false); } catch { /* */ }
   };
 
   // what's in here, for --dev scripts (debug route `eval`)
-  window.dev = { tts, capri, brain, panel, chat, guide, fx, voice, bond, jealousy, reminders, look, pc, setup, extras, screens: () => screens };
+  window.dev = { tts, capri, brain, panel, chat, guide, fx, voice, bond, jealousy, reminders, look, pc, setup, extras, screens: () => screens, memories: () => extras?.memories?.() };
 
   // Global shortcut for status HUD (Capri window is click-through — renderer keys won't fire)
   // Main process should register: globalShortcut.register('CommandOrControl+Alt+S', () => sendCommand('statusHud'))
@@ -541,7 +594,11 @@ async function boot() {
     host.bindShortcut?.('CommandOrControl+Alt+S', 'statusHud');
   } catch { /* main may not expose this yet */ }
 
-  host.onClaudeEvent((evt) => brain.handle(evt));
+  host.onClaudeEvent((evt) => {
+    // brain.handle fires onError / onWorkDone / onRival for real hook events
+    brain.handle(evt);
+  });
+
   host.onWindows((data) => {
     capri.setWindows(data);
     brain.onWindows(data);
@@ -593,10 +650,12 @@ async function boot() {
     if (!there) return null;
     const gy = screens.origin.y + at.y;
     const res = await moveTo(there.id);
+    extras?.afterScreenHop?.();
     return res && { y: gy - res.origin.y };
   };
   capri.onScreenOf = (cursor) => capri.jumpScreen(async () => {
     await moveTo(cursor.display);
+    extras?.afterScreenHop?.();
     return host.cursor();
   }, { toPointer: true });
   // to screen `id`: jumping over the shared edge if there's one at her height, else teleporting
@@ -604,9 +663,13 @@ async function boot() {
     if (!screens || id === screens.current) return;
     const mid = capri.screenPoint(118, 232);
     const side = [-1, 1].find((s) => beyond(s, Math.max(120, mid.y - 140))?.id === id);
-    if (side && (await capri.leapTo(side))) return;
+    if (side && (await capri.leapTo(side))) {
+      extras?.afterScreenHop?.();
+      return;
+    }
     await capri.jumpScreen(async () => {
       await moveTo(id);
+      extras?.afterScreenHop?.();
       return host.cursor();
     });
   };
@@ -843,6 +906,57 @@ async function boot() {
         } else if (typeof capri[cmd.act] === 'function') capri[cmd.act](...(cmd.args || []));
         else capri.perform(cmd.act, cmd.dir || 0);
         break;
+      case 'errorHunt': // --dev: force Error Hunter
+        extras?.onErrorEvent?.(cmd.text || '');
+        break;
+      case 'director': // --dev: force Director point
+        extras?.directorPoint?.();
+        break;
+      case 'glass': // --dev: Glass World
+        extras?.glassWorld?.(cmd.why || 'unstow');
+        break;
+      case 'duel': // --dev: Rival Duel
+        extras?.rivalDuel?.();
+        break;
+      case 'memory': // --dev: push a bond memory
+        extras?.pushMemory?.(cmd.kind || 'note', cmd.text || '…', cmd.face || 'look');
+        break;
+      case 'hyper12': // --dev: 12D cast
+        extras?.hyper12Cast?.();
+        break;
+      case 'ascension':
+        extras?.ascension?.({ force: true });
+        break;
+      case 'gestalt':
+        extras?.gestaltUnmask?.({ force: true });
+        break;
+      case 'reality':
+        extras?.realityCrack?.({ hard: 0.9, how: 'ko' });
+        break;
+      case 'storm':
+        extras?.neuralStorm?.({ force: true });
+        break;
+      case 'boss':
+        extras?.rivalBossIntro?.({ force: true });
+        break;
+      case 'orbit':
+        extras?.victoryOrbit?.({ count: 20, project: cmd.project || 'dev' });
+        break;
+      case 'eclipse':
+        extras?.eclipseMode?.({ force: true });
+        break;
+      case 'chrono':
+        extras?.chronoRewind?.();
+        break;
+      case 'clearFx': // wipe stuck particles / lines
+        extras?.clearFxResidue?.();
+        break;
+      case 'testMelody':
+        extras?.testMelody?.();
+        break;
+      case 'testEdge':
+        extras?.testEdge?.();
+        break;
       default:
         break;
     }
@@ -880,7 +994,13 @@ async function boot() {
   // her welcome: the first time, or while she's meant to watch Claude Code and isn't plugged into it
   if (!config.welcomed || (config.claude && !hooks.installed)) guide.welcome();
   else {
-    panel.say({ kind: 'info', line: brain.onlineLine(), hold: 4000 });
+    // single boot line, no sync %
+    panel.say(bootPayload(brain.lang));
+    setTimeout(() => {
+      if (!panel.visible && !chat.open && !guide.running) {
+        panel.say({ kind: 'info', line: brain.onlineLine(), hold: 3500 });
+      }
+    }, 3000);
   }
 
   // In the evening, after a real day's work, she brings you her report card once, on her own,
