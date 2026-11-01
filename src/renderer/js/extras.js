@@ -28,8 +28,16 @@ export const EXTRAS = {
   linkMax: 300,
   linkTickMs: 180,
   // focus sit / Window Companion
-  focusSitMs: 3_500,
-  focusSitCooldown: 12_000,
+  focusSitMs: 2_000,
+  focusSitCooldown: 6_000,
+  autoSitReturnMs: 1_500,        // min time seated before she may go back (she also waits for the claim FX to end)
+  autoSitReturnMaxMs: 7_000,     // never stay seated longer than this, FX or not
+  shrinkMemoMs: 15_000,          // how long a "just shrunk" window stays a candidate
+  shrinkAreaRatio: 0.85,         // window counts as shrunk when its area drops below this fraction
+  shrinkMinDrop: 40_000,         // ...and by at least this many px²
+  excursionMs: 25_000,           // after any warp she's allowed to stay there this long before rest pulls her home
+  excursionSitMs: 8_000,         // same, but for a seat on a window
+  minSitWidth: 240,
   // typing quiet
   typingQuietMs: 2_500,
   typingBoostMs: 45_000,
@@ -945,60 +953,213 @@ export function installExtras(ctx) {
     nudgeBreak();
   }, 20_000);
 
-  // ── 3 + Window Companion (smart sit by window class) ───────────
+  // ── 3 + Window Companion: auto-sit smallest sittable window ──
   let lastFocusId = null;
   let lastFocusSit = 0;
   let lastType = 0;
+  let autoSitBusy = false;
+  let returnAfterSit = null;
+  let actSeenSince = 0;         // since when capri.act has been continuously set while a sit is pending
+  let autoSitClaims = 0;        // claim FX started during the current auto-sit (one show per sit)
 
-  const tickFocusSit = async () => {
-    if (!capri || reducedMotion.matches) return;
-    if (capri.stowed || capri.dormant || capri.busy || capri.dragging || capri.hidden) return;
-    if (capri.mode === 'sleep' || capri.act) return;
-    if (performance.now() - lastType < EXTRAS.typingQuietMs) return;
-    if (findFullscreenWin(capri)) return;
-
-    const fg = capri.windows?.fg;
-    const wins = capri.windows?.wins || [];
-    const win = (fg && wins.find((w) => w.id === fg)) || wins[0];
-    if (!win || win.id === 'taskbar') return;
-    if (win.id === lastFocusId && capri.stance === 'sit' && capri.perch?.id === win.id) return;
-    if (!capri.canSit?.(win)) return;
-
+  // ── shrink detection ─────────────────────────────────────────
+  // A window "shrinks" when it is restored down from maximized, or its area drops a lot.
+  // Shrunk windows stay candidates for a while (shrinkMemoMs) so busy moments don't lose them.
+  const lastSize = new Map();   // id -> { area, max }
+  const shrunk = new Map();     // id -> expiry (performance.now)
+  const detectShrink = () => {
     const now = performance.now();
-    if (now - lastFocusSit < EXTRAS.focusSitCooldown) return;
-    if (win.id === lastFocusId) return;
+    const wins = capri?.windows?.wins || [];
+    const live = new Set();
+    for (const win of wins) {
+      if (!win || win.id === 'taskbar') continue;
+      live.add(win.id);
+      const cur = { area: win.w * win.h, max: !!win.max };
+      const prev = lastSize.get(win.id);
+      lastSize.set(win.id, cur);
+      if (!prev) continue;
+      const restored = prev.max && !cur.max;
+      const smaller = cur.area < prev.area * EXTRAS.shrinkAreaRatio
+        && prev.area - cur.area > EXTRAS.shrinkMinDrop;
+      if (restored || smaller) shrunk.set(win.id, now + EXTRAS.shrinkMemoMs);
+    }
+    for (const id of [...lastSize.keys()]) if (!live.has(id)) { lastSize.delete(id); shrunk.delete(id); }
+    for (const [id, exp] of shrunk) if (now > exp) shrunk.delete(id);
+  };
 
-    lastFocusId = win.id;
+  // Our own can-sit check (slightly looser than native) so auto-sit still works
+  const canSitLoose = (win) => {
+    if (!win || win.id === 'taskbar') return false;
+    if (win.max) return false;
+    const minW = EXTRAS.minSitWidth || 240;
+    if (!(win.w > minW)) return false;
+    const scale = capri.scale || 0.6;
+    const roomAbove = 80 * scale + 12;
+    const floor = capri.view?.floor || capri.view?.h || 800;
+    if (win.y <= roomAbove) return false;
+    if (win.y >= floor - 60) return false;
+    return true;
+  };
+
+  const listSittable = () => {
+    const wins = capri?.windows?.wins || [];
+    const out = [];
+    for (const win of wins) {
+      if (!canSitLoose(win)) continue;
+      // prefer native canSit when available, but don't require it if coords are odd
+      const probes = [0.5, 0.72, 0.3, 0.2, 0.8].map((t) => Math.max(50, Math.min(win.w - 50, win.w * t)));
+      let dx = null;
+      for (const d of probes) {
+        try {
+          if (typeof capri.covered === 'function' && capri.covered(win, win.x + d)) continue;
+        } catch { /* */ }
+        dx = d;
+        break;
+      }
+      const exposed = dx != null; // false: every probe spot is under another window
+      if (dx == null) dx = Math.max(50, win.w * 0.5);
+      out.push({ win, dx, w: win.w, exposed });
+    }
+    out.sort((a, b) => a.w - b.w);
+    return out;
+  };
+
+  const pickSitDx = (win, cls, fallback) => {
+    if (cls === 'code') return Math.min(Math.max(70, win.w * 0.78), Math.max(70, win.w - 70));
+    if (cls === 'browser' || cls === 'chat') return Math.min(Math.max(60, win.w * 0.55), Math.max(60, win.w - 90));
+    if (cls === 'media') return Math.min(Math.max(50, win.w * 0.88), Math.max(50, win.w - 60));
+    return fallback ?? Math.min(Math.max(60, win.w * 0.72), Math.max(60, win.w - 80));
+  };
+
+  const doAutoSit = async (chosen, { force = false } = {}) => {
+    if (!chosen?.win || !capri) return false;
+    if (autoSitBusy && !force) return false;
+    const now = performance.now();
+    if (!force && now - lastFocusSit < (EXTRAS.focusSitCooldown || 6000)) return false;
+    if (!force && capri.stance === 'sit' && capri.perch?.id === chosen.win.id) return false;
+
+    lastFocusId = chosen.win.id;
     lastFocusSit = now;
-    const cls = classifyWindow(win);
+    autoSitBusy = true;
+    autoSitClaims = 0;
+    // Where she was (stance + perch too: a seat on the taskbar must go back to the taskbar)
+    returnAfterSit = {
+      x: capri.pos?.x,
+      y: capri.pos?.y,
+      face: capri.facing || 1,
+      stance: capri.stance === 'sit' ? 'sit' : 'stand',
+      perch: capri.stance === 'sit' && capri.perch ? { ...capri.perch } : null,
+      excursion: capri._excursionUntil || 0,
+      placeStamp: capri._placeLockUntil || 0,
+    };
+
+    const cls = classifyWindow(chosen.win);
+    const dx = pickSitDx(chosen.win, cls, chosen.dx);
     try {
-      // code / terminal → prefer right edge, quieter
-      // browser / chat → a bit more toward center of titlebar
-      // media → she may sit further back
-      let dx;
-      if (cls === 'code') {
-        dx = Math.min(Math.max(70, win.w * 0.78), Math.max(70, win.w - 70));
-      } else if (cls === 'browser' || cls === 'chat') {
-        dx = Math.min(Math.max(60, win.w * 0.55), Math.max(60, win.w - 90));
-      } else if (cls === 'media') {
-        dx = Math.min(Math.max(50, win.w * 0.88), Math.max(50, win.w - 60));
-      } else {
-        dx = Math.min(Math.max(60, win.w * 0.72), Math.max(60, win.w - 80));
-      }
+      // Pause wander/home pulls while we sit
+      capri.nextMove = now + 8000;
+      capri.nextHome = now + 8000;
       if (typeof capri.sitOn === 'function') {
-        await capri.sitOn({ win, dx });
-      }
-      // tiny personality beat on first sit of a code window
-      if (cls === 'code' && free() && Math.random() < 0.2 && panel && !panel.visible) {
-        panel.say?.({
-          kind: 'idle', face: 'smug',
-          line: brain?.lang === 'th' ? 'โหมดโค้ด… ฉันเงียบให้นะ' : 'Code mode… I’ll stay quiet.',
-          hold: 2200,
+        await capri.sitOn({ win: chosen.win, dx });
+      } else {
+        const seat = typeof capri.seat === 'function'
+          ? capri.seat(chosen.win, dx)
+          : { x: chosen.win.x + dx, y: chosen.win.y + 3 };
+        await capri.teleport?.(seat, {
+          stance: 'sit',
+          perch: { id: chosen.win.id, dx },
+          face: capri.facing || 1,
         });
       }
-    } catch { /* */ }
+      setTimeout(() => {
+        try { if (typeof claimWindow === 'function') claimWindow(chosen.win.id, { force: true }); } catch { /* */ }
+      }, 350);
+    } catch (e) {
+      try { console.warn('[capri] auto-sit failed', e); } catch { /* */ }
+      autoSitBusy = false;
+      return false;
+    }
+
+    // Go back to the exact earlier place once her show on the window is over (claimId clears when
+    // the claim FX ends), but never later than autoSitReturnMaxMs.
+    const seatedAt = performance.now();
+    const goBack = () => {
+      try {
+        const fxRunning = typeof claimId !== 'undefined' && claimId;
+        const waited = performance.now() - seatedAt;
+        if (fxRunning && waited < EXTRAS.autoSitReturnMaxMs) { setTimeout(goBack, 150); return; }
+        const back = returnAfterSit;
+        returnAfterSit = null;
+        autoSitBusy = false;
+        if (!back || !capri || typeof back.x !== 'number') return;
+        if (capri.stowed || capri.dormant || capri.dragging) return;
+        if (capri.perch?.id && capri.perch.id !== lastFocusId) return;          // she's somewhere else now
+        if ((capri._placeLockUntil || 0) !== back.placeStamp) return;           // user moved her meanwhile
+        try { stopClaim(); } catch { /* */ }
+        const tp = capri._rawTeleport || (typeof capri.teleport === 'function' ? capri.teleport.bind(capri) : null);
+        // keep whatever excursion lock she had before; don't let the return itself arm a new one
+        capri._excursionUntil = Math.max(back.excursion, performance.now() + 1_500);
+        capri.nextHome = Math.max(capri.nextHome || 0, capri._excursionUntil);
+        if (back.stance === 'sit' && back.perch) {
+          tp?.({ x: back.x, y: back.y }, { face: back.face, stance: 'sit', perch: back.perch });
+        } else {
+          tp?.({ x: back.x, y: back.y }, { face: back.face, stance: 'stand' });
+        }
+      } catch {
+        autoSitBusy = false;
+      }
+    };
+    setTimeout(goBack, EXTRAS.autoSitReturnMs);
+    return true;
+  };
+
+  // Only reacts to windows that were just shrunk (restored down / made smaller). When several
+  // shrink together, the one with the least room to sit (narrowest) that is still sittable wins.
+  const tickFocusSit = async () => {
+    if (!capri) return;
+    detectShrink();                       // always keep the size memory current
+    if (!shrunk.size) return;
+    if (reducedMotion.matches) return;
+    if (capri.stowed || capri.dormant || capri.dragging || capri.hidden) return;
+    if (capri.busy || capri.flight) return;
+    if (capri.mode === 'sleep' || autoSitBusy) return;
+    // A fullscreen app (game/video) IN FRONT keeps her quiet. A big window elsewhere does not.
+    const fsWin = findFullscreenWin?.(capri);
+    if (fsWin && fsWin.id === capri.windows?.fg) return;
+    // A short act (look, curious...) is fine to wait for; one that's still running after ~2.5 s
+    // (pointing, held pose...) is cut so it can't block the sit forever.
+    if (capri.act) {
+      const now = performance.now();
+      if (!actSeenSince) actSeenSince = now;
+      if (now - actSeenSince < 2_500) return;
+      try { capri.stopPointing?.(); } catch { /* */ }
+      try { capri.endAct?.(false); } catch { /* */ }
+    }
+    actSeenSince = 0;
+    if (capri.stance === 'sit' && capri.perch?.id && capri.perch.id !== 'taskbar') return;
+
+    // listSittable() is sorted narrow → wide, so the first match is the least room that still fits
+    const chosen = listSittable().find((c) => c.exposed && shrunk.has(c.win.id));
+    if (!chosen) return;
+    shrunk.clear();
+    await doAutoSit(chosen, { force: true });
   };
   setInterval(() => { tickFocusSit(); }, EXTRAS.focusSitMs);
+
+  // Hook setWindows so every window-list update can trigger a sit
+  if (capri && typeof capri.setWindows === 'function' && !capri._extrasAutoSitHook) {
+    const _sw = capri.setWindows.bind(capri);
+    capri.setWindows = (data) => {
+      const r = _sw(data);
+      try {
+        if (!autoSitBusy && capri.stance !== 'sit') {
+          setTimeout(() => { try { tickFocusSit(); } catch { /* */ } }, 200);
+        }
+      } catch { /* */ }
+      return r;
+    };
+    capri._extrasAutoSitHook = true;
+  }
 
   // ── 4) Typing → quiet ─────────────────────────────────────────
   const onKey = (e) => {
@@ -3598,24 +3759,53 @@ export function installExtras(ctx) {
   };
   setInterval(melodyTick, 500);
 
-  // Window Breath
-  let lastBreath = -Infinity;
+  // Window claim FX: neon frame + eyes while seated
+  let lastClaimAt = -Infinity;
+  let claimLeave = null;
+  let claimId = null;
+  const stopClaim = () => {
+    try { claimLeave?.(); } catch { /* */ }
+    claimLeave = null;
+    claimId = null;
+  };
+  const claimWindow = (id, { force = false } = {}) => {
+    if (!capri || !fx?.possess || reducedMotion.matches) return false;
+    if (!capri.possessWindows) return false;
+    if (!id || id === 'taskbar') return false;
+    const now = performance.now();
+    if (!force && now - lastClaimAt < (EXTRAS.windowBreathMs || 2800)) return false;
+    const win = (capri.windows?.wins || []).find((w) => w.id === id);
+    if (!win) return false;
+    if (claimId === id && claimLeave) return true;
+    stopClaim();
+    lastClaimAt = now;
+    claimId = id;
+    try {
+      const rect = () => (capri.windows?.wins || []).find((w) => w.id === id) || null;
+      const covers = () => (typeof capri.coversOf === 'function' ? capri.coversOf(id) : []);
+      const entry = Math.max(0, (capri.pos?.x || win.x) - win.x);
+      const taken = fx.possess(rect, { covers, entry, look: () => capri.mouse, angry: false, say: '' });
+      claimLeave = () => { try { taken.leave(); } catch { /* */ } };
+      if (autoSitBusy) autoSitClaims += 1;
+      setTimeout(() => { if (claimId === id) stopClaim(); }, 3200);
+      return true;
+    } catch {
+      stopClaim();
+      return false;
+    }
+  };
   setInterval(() => {
     if (!capri || !fx || reducedMotion.matches) return;
-    if (capri.stowed || capri.dormant || capri.busy || capri.dragging) return;
-    if (capri.stance !== 'sit' || !capri.perch?.id) return;
-    const now = performance.now();
-    if (now - lastBreath < (EXTRAS.windowBreathMs || 2800)) return;
-    lastBreath = now;
-    try {
-      const win = (capri.windows?.wins || []).find((w) => w.id === capri.perch.id);
-      if (!win || win.id === 'taskbar') return;
-      for (const pt of [
-        { x: win.x + 12, y: win.y + 10 },
-        { x: win.x + win.w - 12, y: win.y + 10 },
-        { x: win.x + win.w * 0.5, y: win.y + 6 },
-      ]) fx.ring?.(pt.x, pt.y, { size: 0.09 });
-    } catch { /* */ }
+    if (capri.stowed || capri.dormant || capri.dragging) return;
+    if (capri.stance !== 'sit' || !capri.perch?.id) {
+      if (claimId) stopClaim();
+      return;
+    }
+    if (capri.busy || capri.act || capri.flight) return;
+    const id = capri.perch.id;
+    if (id === 'taskbar') { if (claimId) stopClaim(); return; }
+    if (autoSitBusy && autoSitClaims > 0) return; // auto-sit: one show, then she goes back
+    claimWindow(id);
   }, 1000);
 
   // Handshake Beam
@@ -3751,9 +3941,23 @@ export function installExtras(ctx) {
     if (!pos || !dest) return false;
     return Math.hypot((pos.x || 0) - dest.x, (pos.y || 0) - dest.y) <= maxDist;
   };
-  // Pixel-accurate sit at home: soft snap when close, teleport when far
-  const goRest = (prefer = null) => {
+  // ── Excursions ────────────────────────────────────────────────
+  // "Home" (rest position) and "going somewhere" are separate things. Any warp that isn't the trip
+  // home arms an excursion lock; while it's active the rest logic (behave / wander / 3.5 s poll)
+  // must not pull her back. When it runs out, the normal return-home resumes by itself.
+  const excursion = (ms = EXTRAS.excursionMs) => {
     if (!capri) return;
+    const t = performance.now() + ms;
+    capri._excursionUntil = Math.max(capri._excursionUntil || 0, t);
+    capri.nextHome = Math.max(capri.nextHome || 0, t);
+    capri.nextMove = Math.max(capri.nextMove || 0, t);
+  };
+  const inExcursion = () => performance.now() < (capri?._excursionUntil || 0);
+
+  // Pixel-accurate sit at home: soft snap when close, teleport when far
+  const goRest = (prefer = null, { force = false } = {}) => {
+    if (!capri) return;
+    if (!force && capri.restOn !== 'taskbar' && inExcursion()) return;
     if (capri.busy || capri.dragging || capri.act || capri.stowed || capri.dormant || capri.flight) return;
     if (capri.restOn !== 'taskbar' && performance.now() < (capri._placeLockUntil || 0)) return;
     const dest = restDest(prefer);
@@ -3777,6 +3981,7 @@ export function installExtras(ctx) {
     } catch { /* */ }
   };
   const goEdge = (prefer = null) => goRest(prefer);
+  function clamp2(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
   // Route idle-rest correctly: taskbar mode must SIT, not stand at homePos
   const goHomeOrRest = () => {
     if (!capri) return;
@@ -3843,6 +4048,12 @@ export function installExtras(ctx) {
   if (capri && !capri._extrasEdgeRest) {
     if (typeof capri.teleport === 'function') {
       capri._rawTeleport = capri.teleport.bind(capri);
+      // every warp through the public API is an excursion, except the trip home (taskbar seat)
+      capri.teleport = (pos, opts = {}) => {
+        const toTaskbar = opts?.perch?.id === 'taskbar';
+        if (!opts?.home && !toTaskbar) excursion(opts?.stay ?? (opts?.stance === 'sit' ? EXTRAS.excursionSitMs : EXTRAS.excursionMs));
+        return capri._rawTeleport(pos, opts);
+      };
     }
 
     const _spot = typeof capri.spot === 'function' ? capri.spot.bind(capri) : null;
@@ -3858,29 +4069,53 @@ export function installExtras(ctx) {
           return { x: d.x, y: d.y };
         }
         if (name === 'random' || name == null) {
-          // Prefer native random; ensure it's not almost the same place (or home)
           const w = capri.view?.w || 1280;
           const floor = typeof floorY === 'function' ? floorY() : (capri.view?.floor || capri.floor || 800);
           const home = restDest();
           const cur = capri.pos || { x: w * 0.5, y: floor };
+          const margin = Math.max(80, w * (EXTRAS.edgeRestMargin || 0.14));
+          const avoid = Math.max(0.2, Math.min(0.5, EXTRAS.centerAvoid || 0.38));
+          const leftMax = w * (0.5 - avoid / 2);
+          const rightMin = w * (0.5 + avoid / 2);
+          const topBand = Math.max(120, 280 * (capri.scale || 0.6) + 80);
+          if (!capri._recentWarps) capri._recentWarps = [];
+          const recent = capri._recentWarps;
+          const farRecent = (p) => recent.every((r) => Math.hypot(p.x - r.x, p.y - r.y) > Math.min(220, w * 0.18));
+          const sideX = () => {
+            const preferRight = cur.x < w * 0.5;
+            const goRight = Math.random() < 0.7 ? preferRight : !preferRight;
+            return goRight
+              ? rand(Math.max(margin, rightMin), w - margin)
+              : rand(margin, Math.min(leftMax, w - margin));
+          };
           let best = null;
-          for (let i = 0; i < 8; i++) {
-            const cand = _spot ? _spot('random') : {
-              x: rand(80, w - 80),
-              y: Math.random() < 0.7 ? floor : rand(120, floor),
-            };
-            if (!cand) continue;
-            const farCur = Math.hypot(cand.x - cur.x, cand.y - (cur.y || floor)) > Math.min(280, w * 0.22);
-            const farHome = Math.hypot(cand.x - home.x, cand.y - home.y) > 160;
-            if (farCur && farHome) return cand;
-            best = cand;
+          let bestScore = -1;
+          for (let i = 0; i < 14; i++) {
+            const cornerUp = Math.random() < 0.22;
+            const y = cornerUp
+              ? rand(topBand * 0.55, topBand)
+              : (Math.random() < 0.75 ? floor : rand(topBand, Math.max(topBand + 40, floor - 80)));
+            const cand = { x: sideX(), y };
+            if (cand.x > leftMax && cand.x < rightMin) continue;
+            const dCur = Math.hypot(cand.x - cur.x, cand.y - (cur.y || floor));
+            const dHome = Math.hypot(cand.x - home.x, cand.y - home.y);
+            if (dCur < Math.min(260, w * 0.2) || dHome < 140 || !farRecent(cand)) continue;
+            let score = dCur + dHome * 1.4;
+            for (const r of recent) score += Math.hypot(cand.x - r.x, cand.y - r.y) * 0.5;
+            if (score > bestScore) { bestScore = score; best = cand; }
+            if (dCur > 320 && dHome > 180) { best = cand; break; }
           }
-          // last resort: flip to the other half of the screen
-          if (best) return best;
-          return {
-            x: cur.x < w * 0.5 ? w - 120 : 120,
+          // fallback: the far side, but never the exact same pixel twice
+          const jit = rand(-70, 70);
+          const pick = best || {
+            x: clamp2((cur.x < w * 0.5
+              ? Math.min(w - margin, Math.max(rightMin, w - 120))
+              : Math.max(margin, Math.min(leftMax, 120))) + jit, margin, w - margin),
             y: floor,
           };
+          recent.push({ x: pick.x, y: pick.y });
+          if (recent.length > 5) recent.shift();
+          return pick;
         }
         return _spot ? _spot(name) : { x: 120, y: floorY() };
       };
@@ -3901,6 +4136,20 @@ export function installExtras(ctx) {
         const r = _drop(...args);
         captureAfterDrag();
         return r;
+      };
+    }
+
+    const _sitOn = typeof capri.sitOn === 'function' ? capri.sitOn.bind(capri) : null;
+    if (_sitOn) {
+      capri.sitOn = async (seat) => {
+        const result = await _sitOn(seat);
+        try {
+          const id = seat?.win?.id || seat?.id || capri.perch?.id;
+          if (id && id !== 'taskbar') {
+            setTimeout(() => { try { claimWindow(id, { force: true }); } catch { /* */ } }, 280);
+          }
+        } catch { /* */ }
+        return result;
       };
     }
 
@@ -3925,6 +4174,7 @@ export function installExtras(ctx) {
       capri.wanderStep = () => {
         if (!capri.wander || capri.stance === 'peek') return;
         if (capri.busy || capri.act || capri.dragging || capri.stowed || capri.dormant) return;
+        if (inExcursion() && capri.restOn !== 'taskbar') return; // she's out on a trip: leave her be
         if (capri.stance === 'sit') {
           if (Math.random() < 0.72) { try { capri.perform?.(pick(['look', 'curious'])); } catch { /* */ } }
           else if (Math.random() < 0.4) { try { capri.fall?.(); } catch { /* */ } }
@@ -3950,6 +4200,7 @@ export function installExtras(ctx) {
         try {
           if (
             capri.restOn !== 'taskbar'
+            && !inExcursion()
             && capri.mode === 'idle'
             && capri.stance === 'stand'
             && !capri.busy && !capri.dragging && !capri.act
@@ -3998,6 +4249,7 @@ export function installExtras(ctx) {
           if (!(capri.stance === 'sit' && capri.perch?.id === 'taskbar')) goHomeOrRest();
           return;
         }
+        if (inExcursion()) return;
         const dest = restDest();
         if (nearRest(capri.pos, dest, 40)) return;
         goHomeOrRest();
@@ -4058,6 +4310,14 @@ export function installExtras(ctx) {
     chronoRewind,
     onSpectacleWorkDone,
     clearFxResidue,
+    claimWindow,
+    forceAutoSit: () => {
+      try {
+        const c = listSittable()[0];
+        return c ? doAutoSit(c, { force: true }) : Promise.resolve(false);
+      } catch { return Promise.resolve(false); }
+    },
+    listSittable,
     testMelody,
     testEdge, testSaveRest, testClearRest,
     setDemoMode,

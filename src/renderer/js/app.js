@@ -554,7 +554,24 @@ async function boot() {
     wipe(); // ascension / uplink particles
     await wait(1200);
 
-    // Possess is reserved for real jealousy only (no demo possess / eyes).
+    // Window possess (same FX as night-city-api): frame lightning + eyes
+    caption(t.possess || t.zap || '…');
+    await wait(600);
+    try {
+      if (capri.canPossess?.()) {
+        await capri.possess();
+      } else {
+        const wins = capri.windows?.wins || [];
+        const win = wins.find((w) => w.id !== 'taskbar') || null;
+        if (win && capri.canSit?.(win)) {
+          await capri.sitOn({ win, dx: Math.min(win.w - 70, Math.max(60, win.w * 0.72)) });
+          await wait(300);
+          if (capri.canPossess?.()) await capri.possess();
+        }
+      }
+    } catch { /* */ }
+    await wait(2200);
+    wipe();
 
     caption(t.sleep);
     await wait(1000);
