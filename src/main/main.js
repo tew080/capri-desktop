@@ -15,6 +15,7 @@ const { TRAY, LANGS } = require('./labels');
 const { createBridge } = require('./bridge');
 const { startWindowWatch } = require('./windows');
 const llm = require('./llm');
+const news = require('./news');
 const ollama = require('./ollama');
 const setup = require('./setup');
 const apps = require('./apps');
@@ -357,6 +358,7 @@ function updateConfig(patch) {
     const model = pickModel();
     if (config.load().provider === 'ollama' && model) llm.warm('ollama', model); // loaded again with the new settings
   }
+  if ('newsEvery' in patch) armNews();
   if ('rest' in patch) {
     fitOverlay(); // the taskbar in her window or not
     windowWatch?.refresh();
@@ -365,6 +367,46 @@ function updateConfig(patch) {
   overlay?.webContents.send('capri:config', cfg);
   rebuildTray();
   return cfg;
+}
+
+// News she tells now and then (news.js): every `newsEvery` minutes, when you're at your PC and she's
+// not busy talking. `force`: from her menu, right now, and she says if it fails.
+let newsTimer = null;
+function armNews() {
+  clearTimeout(newsTimer);
+  const mins = Number(config.load().newsEvery) || 0;
+  if (!mins) return;
+  newsTimer = setTimeout(async () => {
+    await tellNews().catch((err) => console.error('[capri] news:', err.message));
+    armNews();
+  }, mins * 60000);
+}
+async function tellNews({ force = false } = {}) {
+  const cfg = config.load();
+  const t = TRAY[resolveLang(cfg.lang)];
+  const fail = () => { if (force) sendCommand('news', { line: t.newsFail, force }); return false; };
+  // not while you're away (10 min idle), hidden, or her AI is busy answering you; not through Claude Code,
+  // whose single conversation her headlines would fill
+  if (!force && (!cfg.visible || chats.size || powerMonitor.getSystemIdleTime() > 600)) return false;
+  if (cfg.provider === 'claude') return fail();
+  if (!chatModels?.length) await refreshModels();
+  const model = pickModel(cfg);
+  if (!model) return fail();
+  try {
+    const line = await news.say({
+      lang: resolveLang(cfg.lang),
+      source: cfg.newsSource,
+      name: cfg.userName,
+      persona: cfg.persona,
+      ask: (messages) => llm.chat(cfg.provider, llmConfig(cfg), { model, messages }, () => {}, AbortSignal.timeout(90000)),
+    });
+    if (!line) return fail();
+    sendCommand('news', { line, force });
+    return true;
+  } catch (err) {
+    console.error('[capri] news:', err.message);
+    return fail();
+  }
 }
 
 function rebuildTray() {
@@ -534,6 +576,22 @@ function rebuildTray() {
         sendCommand('watchScreen', { on: item.checked });
         rebuildTray(); // as it is until she's asked
       },
+    },
+    {
+      label: t.news,
+      submenu: [
+        { label: t.newsNow, click: () => tellNews({ force: true }) },
+        { type: 'separator' },
+        ...[0, 5, 10, 15, 30, 60].map((mins) => ({
+          label: mins ? t.newsMin(mins) : t.newsOff, type: 'radio', checked: (Number(cfg.newsEvery) || 0) === mins,
+          click: () => updateConfig({ newsEvery: mins }),
+        })),
+        { type: 'separator' },
+        { label: t.newsSource, enabled: false },
+        ...[['local', t.newsLocal], ['world', t.newsWorld]].map(([source, label]) => ({
+          label, type: 'radio', checked: (cfg.newsSource || 'local') === source, click: () => updateConfig({ newsSource: source }),
+        })),
+      ],
     },
     {
       label: t.rest,
@@ -1276,6 +1334,7 @@ function main() {
     llm.restoreClaude(readMemory().claude);
     ollama.configure(config.load());
     refreshModels(); // for her menu's model list
+    armNews();
     setTimeout(() => morningRainTip().catch(() => {}), 25000); // once her intro and welcome are done
     setTimeout(() => launch.launchables().catch(() => {}), 20000); // what she can open, before you ask
     // a screen plugged in, unplugged, or rearranged: her window fitted again, and she learns of it

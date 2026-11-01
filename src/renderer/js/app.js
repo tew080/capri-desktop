@@ -871,6 +871,17 @@ async function boot() {
         capri.perform('hop');
         panel.say({ kind: 'info', face: 'look', line: cmd.line, hold: 7000 });
         break;
+      case 'news': // a headline in her words (main.js, news.js); on a timer she doesn't cut in on anything
+        if (!cmd.force && (capri.stowed || capri.dormant || capri.hidden || chat.open || guide.running || panel.visible || capri.mode === 'alert')) break;
+        if (capri.stowed) {
+          host.setConfig({ visible: true });
+          await capri.unstow();
+        }
+        capri.wake();
+        capri.perform('hop');
+        panel.say({ kind: 'info', face: 'look', line: cmd.line, hold: Math.min(16000, 6000 + cmd.line.length * 60) });
+        if (tts.mode !== 'off') tts.say(cmd.line);
+        break;
       case 'satellite': // the whole sequence, on demand (tray)
         if (capri.stowed) {
           host.setConfig({ visible: true });
