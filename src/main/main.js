@@ -82,7 +82,7 @@ function saveMemory(patch) {
 }
 function forgetChats() {
   llm.resetClaude();
-  saveMemory({ history: [], claude: null });
+  saveMemory({ history: [], claude: null, chatSummary: '' });
   sendCommand('forget');
 }
 
@@ -1029,6 +1029,8 @@ function registerIpc() {
   });
   ipcMain.handle('chat:memory', () => readMemory().history || []);
   ipcMain.on('chat:remember', (_e, history) => Array.isArray(history) && saveMemory({ history }));
+  ipcMain.handle('chat:summary', () => readMemory().chatSummary || '');
+  ipcMain.on('chat:saveSummary', (_e, summary) => typeof summary === 'string' && saveMemory({ chatSummary: summary }));
   ipcMain.on('chat:ollama', () => shell.openExternal(OLLAMA_SITE));
   // setting her up with buttons (setup.js): Ollama and a model, or a key, or an address
   const progress = (payload) => overlay?.webContents.send('setup:progress', payload);

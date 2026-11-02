@@ -408,6 +408,7 @@ export function installExtras(ctx) {
     && !capri?.stowed && !capri?.dormant && !capri?.hidden
     && !['sleep', 'alert'].includes(capri?.mode)
     && !chat?.open && !guide?.running
+    && !panel?.isPinned?.()
     && ['stand', 'sit'].includes(capri?.stance);
 
   // ── battery wrap ──────────────────────────────────────────────
@@ -495,7 +496,9 @@ export function installExtras(ctx) {
       coolUntil = now + 2200;
       const lang = brain?.lang || 'en';
       const deviceName = shortName(name) || (lang === 'th' ? 'ไม่ทราบชื่อ' : 'unknown');
-      const deviceType = typeLabel(deviceKind || (kind.startsWith('bt') ? 'bluetooth' : 'usb'), lang);
+      const deviceType = deviceKind === 'audio'
+        ? audioLabel(name, lang)
+        : typeLabel(deviceKind || (kind.startsWith('bt') ? 'bluetooth' : 'usb'), lang);
       try {
         pcReactFx(fx, capri, kind, { ...reactCtx, deviceName, deviceType });
       } catch { /* */ }
@@ -506,10 +509,28 @@ export function installExtras(ctx) {
       } catch { /* */ }
     };
 
+    // หูฟัง/ลำโพง/ไมค์ (รวมแจ็ก 3.5 มม.) ต้องเป็น 'audio' เสมอ — ไม่ใช่มือถือ
+    // ("Headphones" มีคำว่า phone อยู่ข้างใน)
+    const AUDIO_RE = /AudioEndpoint|\bMEDIA\b|audio|head(?:set|phones?)|ear(?:phones?|buds?|pods?)|speakers?|microphone|\bmic\b|line[- ]?(?:in|out)|\bjack\b|3\.5\s*mm/i;
+    const STRONG_PHONE_RE = /AndroidUsb|android|iphone|ipad|galaxy|pixel|oneplus|xiaomi|huawei|\boppo\b|\bvivo\b|apple mobile|\bMTP\b/i;
+
+    const audioLabel = (name, lang) => {
+      const th = lang === 'th';
+      const n = String(name || '');
+      const jack = /jack|3\.5|front|rear|realtek|onboard/i.test(n) ? (th ? ' (แจ็ก 3.5 มม.)' : ' (3.5 mm jack)') : '';
+      if (/microphone|\bmic\b|line[- ]?in/i.test(n)) return (th ? 'ไมโครโฟน' : 'Microphone') + jack;
+      if (/speaker/i.test(n)) return (th ? 'ลำโพง' : 'Speakers') + jack;
+      if (/head(?:set|phones?)|ear(?:phones?|buds?|pods?)/i.test(n)) return (th ? 'หูฟัง' : 'Headphones') + jack;
+      return (th ? 'อุปกรณ์เสียง' : 'Audio device') + jack;
+    };
+
     const classifyPlug = (cls, name, kind) => {
+      const both = `${cls || ''} ${name || ''}`;
+      if (kind === 'bluetooth') return 'bluetooth';
+      // เสียงมาก่อนมือถือ และก่อนค่า kind จากฝั่งเครื่อง (ที่เคยส่ง 'phone' มาผิดให้หูฟัง)
+      if (AUDIO_RE.test(both) && !STRONG_PHONE_RE.test(both)) return 'audio';
       // Prefer server-side kind when specific
       if (kind && !['device', 'usb'].includes(kind)) return kind;
-      const both = `${cls || ''} ${name || ''}`;
       if (/bluetooth/i.test(both)) return 'bluetooth';
       // storage before phone — flash drives must not become "phone"
       if (/DiskDrive|CDROM|SCSIAdapter|mass storage|usb drive|usb disk|removable disk|flash|thumb|sandisk|kingston|transcend/i.test(both)) {

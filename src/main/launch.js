@@ -218,11 +218,35 @@ async function clearRamSafe() {
   });
   child.on('error', () => {}).unref();
   child.unref();
-  // best-effort: ไม่ต้อง admin, ข้ามโปรเซสระบบ/Capri
-  powershell(
-    "Get-Process | Where-Object { $_.WorkingSet64 -gt 80MB -and $_.ProcessName -notmatch '^(explorer|dwm|csrss|winlogon|services|lsass|System|Idle|Capri|electron)$' } | ForEach-Object { try { $_.MinWorkingSet = [IntPtr]1048576 } catch {} }",
-    10000,
-  ).catch(() => null);
+  // best-effort: ไม่ต้อง admin — ข้ามโปรเซสระบบ + ตัว Capri ทั้งหมด (main/renderer/GPU/utility),
+  // ลูกหลานของมัน (powershell, hooks ฯลฯ), ไฟล์ในโฟลเดอร์แอปเดียวกัน, และสมองของเธอ (Ollama / Claude / Codex)
+  const roots = new Set([process.pid, process.ppid]);
+  try {
+    for (const m of app.getAppMetrics()) if (m?.pid) roots.add(m.pid);
+  } catch {
+    // metrics unavailable: pid + parent + path rules still protect her
+  }
+  const rootList = [...roots].filter((n) => Number.isInteger(n) && n > 0).join(',');
+  const appDir = path.dirname(process.execPath).replace(/'/g, "''");
+  const script = [
+    `$keep = New-Object 'System.Collections.Generic.HashSet[int]'`,
+    `foreach ($r in @(${rootList})) { [void]$keep.Add([int]$r) }`,
+    '[void]$keep.Add([int]$PID)',
+    '$procs = @(Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId)',
+    // เพิ่มลูกหลานของ Capri เข้าชุดที่ห้ามแตะ (วนจนไม่เพิ่ม)
+    'do { $n = $keep.Count; foreach ($p in $procs) { if ($keep.Contains([int]$p.ParentProcessId)) { [void]$keep.Add([int]$p.ProcessId) } } } while ($keep.Count -ne $n)',
+    `$appDir = '${appDir}'`,
+    "$skip = '^(explorer|dwm|csrss|winlogon|services|lsass|smss|wininit|svchost|System|Idle|Registry|MemCompression|taskmgr|Capri|electron|node|ollama.*|claude.*|codex.*)$'",
+    'Get-Process | Where-Object { $_.WorkingSet64 -gt 80MB -and $_.ProcessName -notmatch $skip -and -not $keep.Contains([int]$_.Id) } | ForEach-Object {',
+    '  try {',
+    '    $path = $_.Path',
+    '    if ($path -and $path.StartsWith($appDir, [StringComparison]::OrdinalIgnoreCase)) { return }',
+    '    if ($path -and $path -match "ollama|capri") { return }',
+    '    $_.MinWorkingSet = [IntPtr]1048576',
+    '  } catch {}',
+    '}',
+  ].join('; ');
+  powershell(script, 12000).catch(() => null);
   return undefined;
 }
 

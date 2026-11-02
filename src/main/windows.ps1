@@ -111,19 +111,48 @@ public static class CapriWindows {
     return usb;
   }
 
-  // Which of them the window in front is, as a JSON list of keys.
+  // The programs that are web browsers: an AI in one of them is the website, not an app of its own.
+  static readonly Regex BROWSER_PROC = new Regex(@"^(?:chrome|msedge|firefox|brave|opera|opera_gx|vivaldi|arc|chromium|duckduckgo|zen|waterfox|librewolf|floorp)$", RegexOptions.IgnoreCase);
+
+  // The browser's own name at the end of a window title (Chrome, Edge, Firefox, Brave...): not part
+  // of the page. Edge adds a profile too (" - Personal - Microsoft Edge").
+  static readonly Regex BROWSER_TAIL = new Regex(@"\s+[-\u2013\u2014]\s+(?:Google Chrome|Microsoft.{0,3}Edge|Mozilla Firefox|Brave|Opera(?: GX)?|Vivaldi|Arc|Chromium|DuckDuckGo|Zen Browser|Waterfox|LibreWolf|Floorp)\s*$", RegexOptions.IgnoreCase);
+  static readonly Regex TITLE_SPLIT = new Regex(@"\s+[-\u2013\u2014|]\s+");
+  static readonly Regex VENDOR = new Regex(@"^(?:Microsoft|Google|GitHub|Meta)\s+", RegexOptions.IgnoreCase);
+
+  // The AI a title is about, or null. A page only mentioning an AI ("Claude vs ChatGPT - YouTube")
+  // is not that AI: the name has to be the site / app name, which is the last part of the title
+  // ("Some chat - Claude", "Gemini", "Microsoft Copilot"), or the whole title.
+  static string AiByTitle(string title) {
+    if (string.IsNullOrEmpty(title)) return null;
+    string t = BROWSER_TAIL.Replace(title.Trim(), "");
+    var parts = TITLE_SPLIT.Split(t);
+    string last = VENDOR.Replace(parts[parts.Length - 1].Trim(), "");
+    // (the browser's profile name left at the end, "Personal": the site is the part before it)
+    string before = (parts.Length >= 2 && last.Length <= 14) ? VENDOR.Replace(parts[parts.Length - 2].Trim(), "") : "";
+    foreach (var ai in AIS) {
+      string name = ai[1].Replace(@"\b", "");
+      var strict = new Regex("^(?:" + name + ")(?:\\s+\\S+){0,2}$", RegexOptions.IgnoreCase);
+      var whole = new Regex("^(?:" + name + ")$", RegexOptions.IgnoreCase);
+      // ("DeepSeek - Into the Unknown": the name first, then a slogan)
+      if (strict.IsMatch(last) || (before != "" && whole.IsMatch(before)) || (parts.Length == 2 && whole.IsMatch(VENDOR.Replace(parts[0].Trim(), "")))) return ai[0];
+    }
+    return null;
+  }
+
+  // Which of them the window in front is, as a JSON list of keys (at most one: it can't be two).
   static string Ai(IntPtr fg) {
     var title = new StringBuilder(512);
     GetWindowText(fg, title, 512);
     Program(fg);
-    string t = title.ToString();
-    var keys = new StringBuilder();
-    foreach (var ai in AIS) {
-      if (!Regex.IsMatch(t, ai[1], RegexOptions.IgnoreCase) && (ai[2] == "" || proc != ai[2])) continue;
-      if (keys.Length > 0) keys.Append(',');
-      keys.Append('"').Append(ai[0]).Append('"');
+    string key = AiByTitle(title.ToString());
+    if (key == null) {
+      // their own app (the program's name), when the title doesn't say
+      foreach (var ai in AIS) {
+        if (ai[2] != "" && proc == ai[2]) { key = ai[0]; break; }
+      }
     }
-    return "[" + keys.ToString() + "]";
+    return key == null ? "[]" : "[\"" + key + "\"]";
   }
 
   public static void Init() {
@@ -197,22 +226,21 @@ public static class CapriWindows {
         || both.IndexOf("USB Disk", System.StringComparison.OrdinalIgnoreCase) >= 0
         || both.IndexOf("Removable Disk", System.StringComparison.OrdinalIgnoreCase) >= 0) return "storage";
 
-    // Phones / tablets only when name/class clearly says so
+    // Phones / tablets only when name/class clearly says so. Not by the letters "phone" inside a
+    // word: "Headphones" / "Earphone" / "Microphone" are not phones (a 3.5 mm jack plugged in).
     bool phoneHint =
       c == "AndroidUsbDeviceClass"
-      || both.IndexOf("Android", System.StringComparison.OrdinalIgnoreCase) >= 0
-      || both.IndexOf("Phone", System.StringComparison.OrdinalIgnoreCase) >= 0
-      || both.IndexOf("iPhone", System.StringComparison.OrdinalIgnoreCase) >= 0
-      || both.IndexOf("iPad", System.StringComparison.OrdinalIgnoreCase) >= 0
-      || both.IndexOf("Galaxy", System.StringComparison.OrdinalIgnoreCase) >= 0
-      || both.IndexOf("Pixel", System.StringComparison.OrdinalIgnoreCase) >= 0
-      || both.IndexOf("OnePlus", System.StringComparison.OrdinalIgnoreCase) >= 0
-      || both.IndexOf("Xiaomi", System.StringComparison.OrdinalIgnoreCase) >= 0
-      || both.IndexOf("Huawei", System.StringComparison.OrdinalIgnoreCase) >= 0
-      || both.IndexOf("OPPO", System.StringComparison.OrdinalIgnoreCase) >= 0
-      || both.IndexOf("vivo", System.StringComparison.OrdinalIgnoreCase) >= 0
-      || both.IndexOf("Apple Mobile", System.StringComparison.OrdinalIgnoreCase) >= 0
-      || both.IndexOf("MTP", System.StringComparison.OrdinalIgnoreCase) >= 0;
+      || Regex.IsMatch(both, @"Android|iPhone|iPad|Galaxy|Pixel|OnePlus|Xiaomi|Huawei|Apple Mobile|\bOPPO\b|\bvivo\b|\bMTP\b|(?<![A-Za-z])Phone(?![A-Za-z])", RegexOptions.IgnoreCase);
+
+    // Sound devices (headphones, speakers, mics, the 3.5 mm jack) before phones, unless it says
+    // plainly that it is a phone
+    bool audioHint =
+      c == "AudioEndpoint" || c == "MEDIA"
+      || Regex.IsMatch(both, @"Head(?:set|phone)|Ear(?:phone|bud|pod)|Speaker|Microphone|\bMic\b|Line[- ]?(?:In|Out)|\bJack\b|\bAudio\b", RegexOptions.IgnoreCase);
+    bool strongPhone = c == "AndroidUsbDeviceClass"
+      || Regex.IsMatch(both, @"Android|iPhone|iPad|Galaxy|OnePlus|Xiaomi|Huawei|Apple Mobile|\bMTP\b", RegexOptions.IgnoreCase);
+    if (audioHint && !strongPhone) return "audio";
+
     if (phoneHint) return "phone";
     // Generic WPD without phone hint → portable device, not phone
     if (c == "WPD") return "storage";
@@ -265,6 +293,7 @@ public static class CapriWindows {
     Program(fg);
     sb.Append("{\"fg\":").Append(fg.ToInt64()).Append(",\"taskbar\":").Append(taskbar ? "true" : "false")
       .Append(",\"ai\":").Append(Ai(fg))
+      .Append(",\"aiweb\":").Append(BROWSER_PROC.IsMatch(proc) ? "true" : "false")
       .Append(",\"game\":").Append(game == "" ? "null" : Json(game))
       .Append(",\"proc\":").Append(proc == "" ? "null" : Json(proc))
       .Append(",\"usb\":").Append(Usb());
@@ -309,6 +338,80 @@ public static class CapriWindows {
 "@
 
 [CapriWindows]::Init()
+
+# Browsers: a page's title only sometimes says which AI it is (a ChatGPT or Grok conversation is
+# titled by its subject; NotebookLM is not Gemini). The address bar says for sure: its host is read
+# here (Windows UI Automation), matched against the AI list, and only the match goes out in "ai":
+# never the address. Without UI Automation, the title decides, as before.
+$script:uiaOk = $false
+try {
+  Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes -ErrorAction Stop
+  $script:uiaOk = $true
+} catch {}
+$script:urlAi = @(
+  @('chatgpt', '^(chatgpt\.com|chat\.openai\.com)(/|$)'),
+  @('claude', '^claude\.ai(/|$)'),
+  @('gemini', '^(gemini\.google\.com|aistudio\.google\.com|bard\.google\.com)(/|$)'),
+  @('copilot', '^copilot\.microsoft\.com(/|$)'),
+  @('perplexity', '^perplexity\.ai(/|$)'),
+  @('deepseek', '^(chat\.)?deepseek\.com(/|$)'),
+  @('grok', '^(grok\.com|x\.com/i/grok)(/|$|\?)'),
+  @('lechat', '^chat\.mistral\.ai(/|$)'),
+  @('characterai', '^(character\.ai|c\.ai)(/|$)'),
+  @('metaai', '^meta\.ai(/|$)')
+)
+$script:urlSeen = @{ fg = 0; titleAi = ''; at = 0; key = $null }
+
+# The text of the browser's address bar, or $null if it can't be read.
+function Get-UrlText([long]$hwnd) {
+  $root = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]$hwnd)
+  if ($null -eq $root) { return $null }
+  $cond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Edit)
+  # the first text box of the window is the address bar (FindFirst stops there: it doesn't walk the page)
+  $edit = $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $cond)
+  if ($null -eq $edit) { return $null }
+  $pattern = $null
+  if (-not $edit.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$pattern)) { return $null }
+  $v = ([string]$pattern.Current.Value).Trim()
+  if ($v -and $v -notmatch '\s' -and ($v -match '\.' -or $v -match '^[a-z][a-z0-9+.-]*:')) { return $v }
+  return $null
+}
+
+# Which AI an address is ('' when it is none), or $null when it can't tell.
+function Get-AiByUrl($text) {
+  if ($null -eq $text) { return $null }
+  $u = ([string]$text).ToLowerInvariant()
+  $u = $u -replace '^[a-z][a-z0-9+.-]*://', ''
+  $u = $u -replace '^www\.', ''
+  foreach ($e in $script:urlAi) {
+    if ($u -match $e[1]) { return $e[0] }
+  }
+  return ''
+}
+
+# The snapshot, with "ai" set by the address bar when the window in front is a browser.
+function Add-BrowserAi([string]$snap) {
+  if (-not $script:uiaOk) { return $snap }
+  try {
+    $m = [regex]::Match($snap, '"fg":(\d+),.*?"ai":(\[[^\]]*\]),"aiweb":true')
+    if (-not $m.Success) { return $snap }
+    $fg = [long]$m.Groups[1].Value
+    $titleAi = $m.Groups[2].Value
+    $now = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    $s = $script:urlSeen
+    if ($s.fg -ne $fg -or $s.titleAi -ne $titleAi -or ($now - $s.at) -gt 2000) {
+      $s.fg = $fg
+      $s.titleAi = $titleAi
+      $s.at = $now
+      $s.key = Get-AiByUrl (Get-UrlText $fg)
+    }
+    if ($null -eq $s.key) { return $snap }
+    $newAi = if ($s.key -eq '') { '[]' } else { '["' + $s.key + '"]' }
+    return $snap.Replace('"ai":' + $titleAi + ',"aiweb"', '"ai":' + $newAi + ',"aiweb"')
+  } catch {
+    return $snap
+  }
+}
 
 $script:mediaJson = '{"on":false,"app":"","running":false}'
 $script:mediaAt = 0
@@ -427,7 +530,7 @@ $tick = 0
 Update-CapriMedia
 while ($true) {
   if ($tick % 6 -eq 0) { Update-CapriMedia }
-  $snap = [CapriWindows]::Snapshot($Self)
+  $snap = Add-BrowserAi ([CapriWindows]::Snapshot($Self))
   if ($snap.EndsWith('}')) {
     $snap = $snap.Substring(0, $snap.Length - 1) + ',"media":' + $script:mediaJson + '}'
   }

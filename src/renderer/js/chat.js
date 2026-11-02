@@ -8,6 +8,8 @@
 import { pick, fmt } from './util.js';
 import { ASSISTANT_NAMES } from './lines.js';
 import { parseReminder, parseWhen, clock, everyText } from './reminders.js';
+import { RemindUI } from './remind-ui.js';
+import { recallIntent, answerRecall, pairs, transcriptNote, recallFacts, factsNote, verifyRecall } from './recall.js';
 
 // a repeating reminder just set, said by her ({every}: "every hour", {what}: " — drink water")
 const REPEAT_SET = {
@@ -20,7 +22,8 @@ const REPEAT_SET = {
 };
 
 const REMEMBER = 12; // messages she has in mind when answering (a small model keeps her better with less, and it's faster)
-const KEEP = 60;     // messages she remembers across restarts (memory.json)
+const KEEP = 100;    // messages she remembers across restarts (memory.json): the whole log stays, only the prompt is windowed
+const SUMMARIZE_AFTER = 8; // summarise old turns when history grows beyond REMEMBER + this
 // The long how-to for her PC tags ([[open:]], [[music:]]...) is only worth its ~400 tokens when the message
 // could be asking for one: otherwise a small model gets distracted by it and answers off-topic.
 // false = always send it all.
@@ -292,6 +295,10 @@ export class Chat {
     this.host = host;
     this.brain = brain;
     this.history = []; // your chats with her, [{ role, content }], kept by main.js across restarts
+    this.summary = ''; // rolling summary of turns that slid out of REMEMBER (survives restarts via config)
+    this.summarising = false; // guard: only one background summarise at a time
+    this.summaryId = 0;
+    this.summaryMark = null;  // key of the last message the summary already covers (so each turn is summarised once)
     this.warm = false; // a model already answered this run (Ollama's first answer waits for it to load)
     this.open = false;
     this.turn = 0;     // id of the answer coming in, if any
@@ -305,6 +312,7 @@ export class Chat {
     this.jealousy = null;  // and how she takes your other AIs
     this.onMessage = null; // () => void: you said something to her
     this.waitingWhen = null; // a reminder you asked for without saying when: { text, until }
+    this.remindUI = new RemindUI(this); // duplicates, the list, changing the time (remind-ui.js)
     host.onChatDelta(({ id, text }) => this.onDelta(id, text));
   }
 
@@ -315,8 +323,16 @@ export class Chat {
   async start() {
     const { capri, host, t } = this;
     if (this.open) {
-      this.panel.chatInput.focus();
-      return;
+      // really there? Something of hers (a reminder, a notice) can take her panel over and leave it empty: the chat
+      // is then rebuilt below instead of being taken for "already open" (which left a black bar nobody could type in)
+      const alive = this.panel.visible && this.panel.current?.chat && this.panel.chatInput;
+      if (alive) {
+        this.panel.chatInput.focus();
+        return;
+      }
+      this.open = false;
+      this.turn = 0;
+      host.focusOverlay(false);
     }
     if (capri.stowed) {
       host.setConfig({ visible: true });
@@ -352,6 +368,20 @@ export class Chat {
       return;
     }
     this.history = cleanHistory(await host.chatMemory().catch(() => this.history)); // "forget" in her menu may have emptied it
+    // load the rolling summary that was saved the last time old turns were compressed
+    try {
+      const saved = (await host.chatSummary()) || '';
+      let parsed = null;
+      try { parsed = JSON.parse(saved); } catch { /* an older plain-text summary */ }
+      if (parsed && typeof parsed.t === 'string') {
+        this.summary = parsed.t;
+        this.summaryMark = parsed.m || this.summaryMark;
+      } else {
+        this.summary = saved;
+        // an older summary covered everything up to the live window
+        if (saved && !this.summaryMark && this.history.length > REMEMBER) this.summaryMark = keyOf(this.history[this.history.length - REMEMBER - 1]);
+      }
+    } catch { this.summary = ''; }
     this.cold = status.warmup && !this.warm;
     this.agent = Boolean(status.agent); // Claude Code answers, as her, and really works in your project
     const shortModel = status.model.replace(/:latest$/, '').replace(/^models\//, ''); // Ollama's tag, Gemini's prefix
@@ -406,6 +436,26 @@ export class Chat {
 
   async send(text) {
     if (this.turn || !this.open) return;
+    try {
+      await this.sendInner(text);
+    } catch (err) {
+      // a turn must never leave the chat stuck (input disabled, an empty answer with a cursor, nothing coming)
+      console.error('[capri] chat turn failed:', err);
+      if (this.turn) this.host.chatStop(this.turn);
+      this.turn = 0;
+      if (this.history.at(-1)?.role === 'user' && this.history.at(-1).content === text) this.history.pop();
+      if (this.open) {
+        this.panel.setFace('wide');
+        this.panel.stream(`${this.t.failed} ${err?.message || ''}`.trim(), { done: true });
+        this.panel.setChatBusy(false);
+      }
+    }
+  }
+
+  async sendInner(text) {
+    if (this.turn || !this.open) return;
+    // the summary being written in the background must not keep her waiting: Ollama answers one request at a time
+    if (this.summarising && this.summaryId) this.host.chatStop(this.summaryId);
     const id = Date.now();
     this.turn = id;
     this.answer = '';
@@ -415,9 +465,28 @@ export class Chat {
     this.panel.chatTurn({ quote: text, face: 'aside' });
     this.capri.pulse();
     this.onMessage?.();
+    // "what did I ask you?", "what have we talked about?": the facts come from the real log (never from the
+    // model's memory, which a 7B model invents); the model then says them in her own voice, and the answer is
+    // checked against the facts. If it strays, the plain retrieved answer is shown instead.
+    const recall = this.agent ? null : recallIntent(text);
+    const history0 = this.history.slice(0, -1);
+    const recallOpts = { summary: this.summary, lang: this.brain.lang, name: this.brain.custom?.userName || '', partial: this.history.length >= KEEP };
+    const facts = recall && recall.kind !== 'general' ? recallFacts(recall, history0) : [];
+    const plain = recall && recall.kind !== 'general' ? answerRecall(recall, history0, recallOpts) : null;
+    if (plain && !facts.length) {
+      // nothing to recall yet: said plainly
+      this.turn = 0;
+      this.panel.setChatBusy(false);
+      this.panel.setFace(plain.face);
+      this.panel.stream(plain.line, { done: true });
+      this.remember({ role: 'assistant', content: plain.line });
+      this.bond?.heard(text);
+      return;
+    }
+    const grounded = facts.length ? factsNote(recall, facts) : '';
     // what you asked for plainly happens right away (the music, the volume, an app you named): her
     // line about it comes under her answer (Claude Code, answering her chat, does things its own way)
-    const asked = this.agent ? null : this.asked(text);
+    const asked = (this.agent || grounded || recall?.reminder) ? null : this.asked(text);
     if (asked?.kind === 'look') return this.sendLook(text, id);
     // PC actions ที่จับจากข้อความได้ชัด: ทำทันที จบด้วยข้อความสั้น — ไม่ส่งโมเดล (7B มักแต่งข้อความปน)
     // close / cleanup / ram ใช้ปุ่มยืนยัน; status / open / media / music / … ทำเลย
@@ -443,8 +512,9 @@ export class Chat {
         return;
       }
       // open / media / music / youtube / roblox / web / files / shot / play / name / memo / remind
-      if (['open', 'media', 'music', 'youtube', 'roblox', 'web', 'files', 'shot', 'play', 'name', 'memo', 'remind'].includes(asked.kind)) {
+      if (['open', 'media', 'music', 'youtube', 'roblox', 'web', 'files', 'shot', 'play', 'name', 'memo', 'remind', 'remindOp'].includes(asked.kind)) {
         const done = await this.doNow(asked);
+        if (this.turn !== id) return; // closed meanwhile
         this.turn = 0;
         this.panel.setChatBusy(false);
         if (done?.offer) return this.launch(done.offer, '');
@@ -476,6 +546,14 @@ export class Chat {
           });
           return;
         }
+        if (done?.menu) {
+          // a list / a question with its own buttons (remind-ui.js)
+          this.panel.setFace(done.face || 'smug');
+          this.panel.stream(done.line, { done: true });
+          this.remember({ role: 'assistant', content: done.line });
+          this.panel.setActions(done.menu.actions, done.menu.onAction);
+          return;
+        }
         if (done?.line) {
           this.panel.setFace(done.face || 'laugh');
           this.panel.stream(done.line, { done: true });
@@ -483,6 +561,10 @@ export class Chat {
           return;
         }
         // ทำไม่ได้ / หาไม่เจอ — ปล่อยให้โมเดลตอบต่อ
+        // (this turn is on again: it was ended above for the cases that answered by themselves. Left ended, the model's
+        // answer was thrown away as "closed meanwhile" and the chat sat empty with a cursor.)
+        this.turn = id;
+        this.panel.setChatBusy(true);
       }
     }
     const early = null; // PC actions above already finished or fell through to the model
@@ -497,9 +579,16 @@ export class Chat {
       else this.history.splice(at, 0, { role: 'assistant', content: this.opening });
       this.opening = null;
     }
+
     const who = this.brain.custom?.userName || (this.brain.lang === 'th' ? 'นาย' : 'you');
-    const shots = this.agent ? [] : (SHOTS[this.brain.lang] || []).flatMap(([q, a]) => [{ role: 'user', content: q }, { role: 'assistant', content: a.replace(/\{name\}/g, who) }]);
-    const messages = [{ role: 'system', content: this.persona(text) }, ...shots, ...this.history.slice(-REMEMBER)];
+    const recalling = !this.agent && (Boolean(recall) || RECALL.test(text)); // about the conversation: no examples beside the real thing
+    const shots = (this.agent || recalling) ? [] : (SHOTS[this.brain.lang] || []).flatMap(([q, a]) => [{ role: 'user', content: q }, { role: 'assistant', content: a.replace(/\{name\}/g, who) }]);
+    // inject the rolling summary (if any) as a second system message so the model knows what
+    // was said before the sliding window — without spending full tokens on verbatim old turns
+    const summaryMsg = (!this.agent && this.summary)
+      ? [{ role: 'system', content: `[สรุปคร่าว ๆ ของบทสนทนาจริงก่อนหน้านี้ (ไม่ใช่ตัวอย่าง) — ใช้เป็นบริบท อย่าพูดซ้ำตรง ๆ]:\n${this.summary}` }]
+      : [];
+    const messages = [{ role: 'system', content: this.persona(text) }, ...summaryMsg, ...shots, ...this.history.slice(-REMEMBER)];
     // Her mood (angry, sulking…) and her language, said again right by your message, for this answer
     // only. Small local models mostly go by the last thing they read: up in her prompt alone, they
     // forget it (and answer in English after a conversation in English).
@@ -522,7 +611,7 @@ export class Chat {
           ? `Real weather data just fetched (answer from this only, say the main numbers in your own words, never invent more): ${w.text}`
           : 'You tried to look up the weather but it failed. Say so briefly in character and never make up any weather.';
       }
-      messages[messages.length - 1] = { ...last, content: `${last.content}\n\n(Note for you, never repeat it: ${[topicAnchor, clockNote, weatherNote, mood, this.languageNote()].filter(Boolean).join(' ')})` };
+      messages[messages.length - 1] = { ...last, content: `${last.content}\n\n(Note for you, never repeat it: ${[topicAnchor, clockNote, weatherNote, grounded || this.recallNote(text), mood, this.languageNote()].filter(Boolean).join(' ')})` };
     }
     // nothing yet after a few seconds: Ollama is still loading the model (the first answer after a start),
     // or Claude Code is at work
@@ -530,7 +619,10 @@ export class Chat {
     const slow = wait && setTimeout(() => {
       if (this.turn === id && !this.answer) this.panel.stream(wait);
     }, LOADING_AFTER_MS);
+    // a model that stops answering (Ollama stuck, a cloud model hanging) must not leave her busy forever
+    const stall = setTimeout(() => { if (this.turn === id) this.host.chatStop(id); }, 150000);
     const res = await this.host.chatSend({ id, messages });
+    clearTimeout(stall);
     clearTimeout(slow);
     if (this.turn !== id) {
       // closed meanwhile: your message goes too, or the next answer would answer it as well
@@ -549,14 +641,18 @@ export class Chat {
     // a looping answer never goes into her memory: it would teach the next one to loop
     const raw = polish(clean(res.text), this.lastAnswer(), this.brain.custom?.userName);
     const looped = /(ขอโทษนะ[\s\S]*){2,}|(ฉันคือ\s*Capri[\s\S]*){2,}/.test(raw) || LEAK.test(raw);
-    const answer = looped ? 'เมื่อกี้เบลอไปแป๊บ choom ลองพูดใหม่นะ' : stopLoop(raw) || 'อืม… ลองพูดอีกทีนะ';
+    let answer = looped ? 'เมื่อกี้เบลอไปแป๊บ choom ลองพูดใหม่นะ' : (grounded ? raw : stopLoop(raw)) || 'อืม… ลองพูดอีกทีนะ';
+    // a recall answer that doesn't carry the real facts is a made-up one: the retrieved answer replaces it
+    if (grounded && (looped || !verifyRecall(answer, facts))) answer = plain.line;
     this.warm = true;
-    if (!looped) this.remember({ role: 'assistant', content: answer });
+    if (!looped || grounded) this.remember({ role: 'assistant', content: answer });
     this.panel.stream(answer, { done: true });
     this.panel.setFace(mood(answer));
     this.panel.setChatBusy(false);
     if (!this.agent) this.after(res.text, answer, asked, early, text);
     this.listApps(); // fresh for the next message
+    // old turns piling up: summarised now that she's done answering (in the background, never in the way of a reply)
+    if (!this.agent && this.history.length > REMEMBER + SUMMARIZE_AFTER) setTimeout(() => this.summarizeOld(), 2500);
   }
 
   // "Look at my screen" in her chat: she looks (asking you first, the first time) and answers here,
@@ -634,6 +730,48 @@ export class Chat {
     this.host.chatRemember(this.history);
   }
 
+  // Compress the turns that left the live window (REMEMBER) into a short Thai summary, so the model still
+  // knows the gist of what was said earlier. Incremental: each turn is summarised once (summaryMark),
+  // and nothing is deleted: the whole log stays in this.history for exact recall (recall.js).
+  // Runs in the background, one at a time, never during a live answer.
+  async summarizeOld() {
+    if (this.summarising || this.turn || this.agent) return;
+    const edge = this.history.length - REMEMBER; // first message still in the live window
+    if (edge <= 0) return;
+    const from = (this.summaryMark ? this.history.findLastIndex((m) => keyOf(m) === this.summaryMark) : -1) + 1;
+    if (edge - from < SUMMARIZE_AFTER) return;  // not worth a round-trip yet
+    const chunk = this.history.slice(from, edge);
+    const mark = keyOf(this.history[edge - 1]);
+    const real = pairs(chunk);                  // without the questions about the conversation itself
+    if (!real.length) { this.summaryMark = mark; return; }
+    this.summarising = true;
+    try {
+      const prevNote = this.summary ? `สรุปเดิม (ให้รวมเข้ากับสรุปใหม่): ${this.summary}\n\n` : '';
+      const turns = real
+        .map((p) => `ผู้ใช้: ${String(p.q).replace(/\s+/g, ' ').slice(0, 200)}${p.a ? `\nCapri: ${String(p.a).replace(/\s+/g, ' ').slice(0, 90)}` : ''}`)
+        .join('\n');
+      this.summaryId = -Date.now(); // negative id: not a chat turn, never shown; cancelled if you speak meanwhile
+      const res = await this.host.chatSend({
+        id: this.summaryId,
+        messages: [
+          {
+            role: 'system',
+            content: 'คุณเป็นผู้ช่วยจดบันทึกบทสนทนา ตอบเป็นภาษาไทยเท่านั้น ไม่เกิน 6 บรรทัด ขึ้นต้นแต่ละบรรทัดด้วย "- " เขียนเฉพาะสิ่งที่มีอยู่ในบทสนทนาด้านล่างจริง ๆ เท่านั้น: ชื่อที่ผู้ใช้บอก สิ่งที่ผู้ใช้ถามหรือเล่า ข้อเท็จจริง คำสัญญา ห้ามเดา ห้ามแต่งเพิ่ม ห้ามวิเคราะห์ ถ้าไม่แน่ใจให้ข้าม',
+          },
+          { role: 'user', content: `${prevNote}บทสนทนาใหม่:\n${turns}\n\nจดบันทึกรวมทั้งสรุปเดิมและบทสนทนาใหม่ (ไม่เกิน 6 บรรทัด):` },
+        ],
+      }).catch(() => null);
+      if (!res?.ok) return;
+      const next = clean(res.text).slice(0, 600).trim();
+      if (next.length < 10 || LEAK.test(next)) return;
+      this.summary = next;
+      this.summaryMark = mark;
+      try { this.host.saveSummary(JSON.stringify({ t: this.summary, m: this.summaryMark })); } catch { /* non-fatal */ }
+    } finally {
+      this.summarising = false;
+    }
+  }
+
   listApps() {
     this.appsReady = this.host.openApps().then((list) => { this.apps = list || []; }).catch(() => {});
   }
@@ -643,6 +781,8 @@ export class Chat {
   asked(text) {
     const count = text.trim().split(/\s+/).length;
     if (this.reminders) {
+      const op = this.remindUI.parse(text, count);
+      if (op) return { kind: 'remindOp', op };
       const remind = parseReminder(text);
       if (remind) return { kind: 'remind', ...remind };
       // the time, said after she asked when ("dans 10 min")
@@ -709,13 +849,18 @@ export class Chat {
   async doNow(asked) {
     const { t } = this;
     const custom = this.brain.custom;
+    if (asked.kind === 'remindOp') return this.remindUI.run(asked.op);
     if (asked.kind === 'remind') {
       if (!asked.at) {
         this.waitingWhen = { text: asked.text, until: Date.now() + 3 * 60 * 1000 }; // her answer asks when
         return null;
       }
       this.waitingWhen = null;
+      // the same reminder twice: she asks what to do instead of piling up a second one
+      const old = this.reminders.findDuplicate({ text: asked.text, at: asked.at });
+      if (old) return this.remindUI.dupe(old, asked);
       const r = this.reminders.add(asked.at, asked.text, asked.every); // set before her answer is asked for: she knows
+      this.remindUI.note(r.id);
       const tr = this.brain.t.remind;
       if (r.every) {
         const lang = REPEAT_SET[this.brain.lang] ? this.brain.lang : 'en';
@@ -1178,11 +1323,27 @@ export class Chat {
   // False if she's in the middle of an answer.
   interject(line, actions, onAction) {
     if (!this.open || this.turn) return false;
+    // a menu is waiting for your click (confirm / cancel, a list): this goes in front as its own
+    // message, and the menu comes back once it's dealt with, so neither is lost
+    // (a button waiting that can't be saved and brought back, such as the "cancel" under a reminder just set, is
+    // dropped: refusing here sent the reminder to another panel, which took the chat's place)
+    const snap = this.panel.isPinned?.('actions') ? this.panel.snapshot?.() : null;
+    const menu = snap && typeof snap.then !== 'function' ? snap : null; // (an older panel.js gave a Promise here)
     this.panel.setFace('look');
     this.panel.stream(line, { done: true });
-    this.panel.setActions(actions, onAction);
+    const mine = menu && actions?.length ? (id) => { onAction?.(id); this.restoreMenu(menu, 2600); } : onAction;
+    this.panel.setActions(actions, mine);
     this.remember({ role: 'assistant', content: line });
+    if (menu && !actions?.length) this.restoreMenu(menu, 4000);
     return true;
+  }
+
+  // the menu that was waiting before something came in front of it
+  restoreMenu(menu, after) {
+    setTimeout(() => {
+      if (!this.open || this.turn || this.panel.isPinned?.('actions')) return; // she's busy, or asked something else
+      this.panel.restore?.(menu);
+    }, after);
   }
 
   // What the user made her (custom.js): their name, how they want her, what to remember.
@@ -1214,6 +1375,13 @@ export class Chat {
     })();
     this.panel.stream(shouldStopNow ? stopLoop(live) : live);
     this.voice.play('blip'); // her blips as the words come in
+  }
+
+  // "what did I ask you a moment ago?": the model keeps only so much of a long prompt (the oldest
+  // messages go first), so what was said is put right by the question, which always arrives
+  recallNote(text) {
+    if (!recallIntent(text) && !RECALL.test(text)) return '';
+    return transcriptNote(this.history, this.summary);
   }
 
   // what she said last time (so she doesn't open the same way twice)
@@ -1259,6 +1427,7 @@ export class Chat {
         ? `เธออยู่บนเดสก์ท็อปของผู้ใช้เป็นตัวเล็ก ๆ ที่กลิตช์ และคอยดู ${assistant} ผู้ช่วยเขียนโค้ดของเขา พูดถึง ${assistant} เฉพาะตอนผู้ใช้ถามถึงมันหรือถึงงานของเขา`
         : 'เธออยู่บนเดสก์ท็อปของผู้ใช้เป็นตัวเล็ก ๆ ที่กลิตช์ คอยอยู่เป็นเพื่อนเขา',
       'กฎการพูด (สำคัญที่สุด):',
+      '0. บทสนทนาตัวอย่างที่อยู่ก่อนข้อความจริงเป็นแค่ตัวอย่างวิธีพูด ไม่ใช่เรื่องที่คุยกับผู้ใช้จริง ห้ามเอามาเล่าเมื่อถูกถามว่าคุยอะไรกันไป ถ้าไม่รู้ให้บอกว่าจำไม่ได้ ห้ามแต่ง',
       '1. ตอบสิ่งที่ผู้ใช้พูดหรือถามให้ตรงก่อน ด้วยคำง่าย ๆ (ความรู้ทั่วไปก็อธิบายสั้น ๆ แบบเพื่อน) แล้วค่อยแซวนิดเดียว ห้ามตอบเรื่องอื่น ห้ามข้ามคำตอบไปแซวหรือถามกลับ',
       '2. ตอบ 1-2 ประโยคสั้น ๆ เป็นข้อความล้วน อีโมจิไม่เกิน 1 ตัว พูดแต่ละเรื่องครั้งเดียว ไม่พูดซ้ำ',
       '3. เธอเป็นผู้หญิง เรียกตัวเองว่า "ฉัน" ลงท้ายประโยคด้วย ค่ะ นะ จ้ะ (ประโยคคำถามใช้ "คะ") แม้ผู้ใช้จะพูดว่า "ผม" หรือ "ครับ" เธอก็ยังพูดแบบผู้หญิงเสมอ',
@@ -1275,6 +1444,7 @@ export class Chat {
       'You love the satellite that crosses the night sky and dream of reaching it, but bring it up only once in a while, never in every answer. Talk about what the user talks about.',
       'How you talk: playful, mischievous, teasing chaos-gremlin energy, warm underneath, never cruel. Night City slang now and then (choom, preem, nova, gonk, flatline), not in every sentence. You are female (she/her). If the user gave you a name to call them, use it. Never invent opening ถังขยะ or any PC action.',
       'Rules: reply in one or two short sentences of plain text, at most one emoji. Answer what the user actually said, then stop.',
+      'Any example conversation placed before the real messages only shows your style: it never happened. Never recount it as what you and the user talked about; if you do not remember something, say so, never invent.',
       'A greeting, a laugh (555), a slang word or a single word from the user: answer with one short, playful line, as a friend would.',
       'If the user is just chatting (not asking to open/close/check the PC), answer briefly and stop. Say each thing once.',
       'Answer the question asked first, in plain words (general knowledge too: explain it simply, as a friend would), then add one small playful touch. Use choom rarely, not every answer. Your name is always Capri, and you are a woman. Reply only in the user\'s language. Never say you checked or did something on the PC unless your system shows it.',
@@ -1300,6 +1470,8 @@ export class Chat {
     ].join('\n');
   }
 }
+
+const keyOf = (m) => `${m?.role}|${m?.content}`; // a message's identity across reloads of the saved history
 
 // A 7B model sometimes answers its own instructions (sorry, I understand, I will follow the advice):
 // never shown, never kept in her memory.
@@ -1352,8 +1524,21 @@ export function polish(text, previous = '', name = '') {
 }
 
 // The model's answer as she'd say it: no reasoning block, no markdown marks.
+// a question about what was just said in the chat
+const RECALL = /เมื่อกี้|เมื่อตะกี้|เมื่อสักครู่|เมื่อครู่|ตะกี้|ก่อนหน้า(?:นี้)?|ที่ถามไป|ที่พูดไป|ที่คุยกัน|ถามอะไร|พูดอะไร|บอกอะไร|จำได้|ลืมแล้ว|what did i (?:ask|say)|what i (?:asked|said)|earlier|just (?:now )?(?:asked|said)|remember what|tout à l['’]heure|je viens de (?:dire|demander)|qu['’]est-ce que j['’]ai (?:dit|demand)|hace un momento|qué te (?:pregunt|dij)|há pouco|o que eu (?:perguntei|disse)|только что|что я (?:спросил|сказал)/i;
+
+// the name of an AI, with its first letter swallowed or swapped for a Thai one ("กrok" for "Grok"),
+// as a small model sometimes writes it
+const BRANDS = ['ChatGPT', 'Claude', 'Gemini', 'Gemma', 'Copilot', 'Perplexity', 'DeepSeek', 'Grok', 'Codex', 'Mistral', 'Capri', 'Spotify', 'YouTube'];
+const BRAND_FIXES = BRANDS.map((b) => [new RegExp(`[\\u0E01-\\u0E2E](?=${b.slice(1)}(?![A-Za-z]))`, 'gi'), b[0]]);
+function fixBrands(s) {
+  let out = s;
+  for (const [re, first] of BRAND_FIXES) out = out.replace(re, first);
+  return out;
+}
+
 export function clean(text) {
-  return String(text)
+  return fixBrands(String(text))
     .replace(/<think>[\s\S]*?(<\/think>|$)/g, '')
     .replace(/\[\[[^\]]*(\]\]|$)/g, '') // her tags (read from the raw answer, never shown)
     .replace(/[*_`#]+/g, '')

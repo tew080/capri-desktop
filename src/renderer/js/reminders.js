@@ -21,7 +21,7 @@ const WORDS = {
   cinquante: 50, fifty: 50, cincuenta: 50, cinquenta: 50, пятьдесят: 50, ห้าสิบ: 50,
 };
 const NUM = `(\\d+(?:[.,]\\d+)?|${Object.keys(WORDS).sort((a, b) => b.length - a.length).join('|')})`;
-const UNIT = '(secondes?|seconds?|secs?|segundos?|секунд[уы]?|сек|s|วินาที|นาที|minutes?|minutos?|mins?|mn|минут[уы]?|мин|m|heures?|hours?|hrs?|horas?|час(?:а|ов)?|ч|h|ชั่วโมง)';
+const UNIT = '(secondes?|seconds?|secs?|segundos?|секунд[уы]?|сек|s|วินาที|วิ(?![\\u0E00-\\u0E7F])|นาที|minutes?|minutos?|mins?|mn|минут[уы]?|мин|m|heures?|hours?|hrs?|horas?|час(?:а|ов)?|ч|h|ชั่วโมง|ชม(?![\\u0E00-\\u0E7F]))';
 const SOON = '(?:(?<![\\p{L}])(?:dans|in|en|em|daqui a|dentro de|через)|(?:ใน|อีก|ภายใน))';
 // "dans 20 min", "in 1 hour and 30 minutes", "через 2 часа"
 const IN = new RegExp(`${SOON}\\s+${NUM}\\s*${UNIT}(?![a-zA-Z\\u00C0-\\u024F\\u0400-\\u04FF])(?:\\s*(?:et|and|y|e|и)?\\s*${NUM}\\s*${UNIT}(?![a-zA-Z\\u00C0-\\u024F\\u0400-\\u04FF]))?`, 'iu');
@@ -44,7 +44,9 @@ const MIDNIGHT = word('(?:(?:à|at|a|al|в|ตอน)\\s+)?(?:minuit|midnight|me
 const TOMORROW = word('demain|tomorrow|amanh[ãa]|завтра|(?<!de la\\s)mañana|พรุ่งนี้');
 const PM = word("ce soir|du soir|de l['’]après-midi|cet après-midi|tonight|this evening|in the evening|this afternoon|in the afternoon|de la tarde|de la noche|esta tarde|esta noche|da tarde|da noite|hoje à noite|вечера|дня|เย็น|ค่ำ|บ่าย|ตอนเย็น|ตอนค่ำ");
 const AM = word('du matin|ce matin|in the morning|de la mañana|da manhã|de manhã|утра|เช้า|ตอนเช้า');
-const POLITE = word("s['’]il te pla[iî]t|stp|svp|please|pls|plz|por favor|пожалуйста|หน่อย|ด้วย|นะ|ค่ะ", 'giu');
+const POLITE = word("s['’]il te pla[iî]t|stp|svp|please|pls|plz|por favor|пожалуйста", 'giu');
+// Thai polite particles: no spaces in Thai, so strip separately in a loop.
+const THAI_POLITE = /(?:นะคะ|นะค่ะ|ด้วย|หน่อย|นะ|ค่ะ|จ้า|จ๊ะ)(?=(?:ด้วย|หน่อย|นะ|ค่ะ|จ้า|จ๊ะ)|\s|[.,!?]|$)/gu;
 // what comes before what to remind you of, once the rest is gone
 const LEAD = new RegExp("^(?:[\\s,:;.!?-]|d['’]|qu['’]|(?:capri|de que|de|que|pour|à|to|that|about|of|for|para|pra|me|о|об|что|чтобы|мне)(?![\\p{L}])|(?:ให้|ว่า|เรื่อง|ถึง)\\s*)+", 'iu');
 
@@ -67,8 +69,8 @@ function number(word) {
 
 function unitMs(unit) {
   const u = unit.toLowerCase();
-  if (/^(s|sec|secs|seconde|secondes|second|seconds|segundo|segundos|секунд|секунду|секунды|сек|วินาที)$/.test(u)) return 1000;
-  if (/^(h|hr|hrs|heure|heures|hour|hours|hora|horas|час|часа|часов|ч|ชั่วโมง)$/.test(u)) return 3600 * 1000;
+  if (/^(s|sec|secs|seconde|secondes|second|seconds|segundo|segundos|секунд|секунду|секунды|сек|วินาที|วิ)$/.test(u)) return 1000;
+  if (/^(h|hr|hrs|heure|heures|hour|hours|hora|horas|час|часа|часов|ч|ชั่วโมง|ชม)$/.test(u)) return 3600 * 1000;
   return 60 * 1000;
 }
 
@@ -175,7 +177,16 @@ export function parseReminder(text, now = Date.now()) {
   for (const m of when?.spans || []) what = what.replace(m[0], ' '); // the time first: a timer's words hold it
   what = what.replace(new RegExp(TRIGGER.source, 'giu'), ' ');
   what = what.replace(/(?<![\p{L}\p{M}])set\s+(?:a|an)(?![\p{L}\p{M}])/giu, ' ').replace(TIMER_WORDS, ' ').replace(/(?<![\p{L}\p{M}])\d+\s*(?:วินาที|นาที|ชั่วโมง)\s*(?:แล้ว)?/gu, ' ').replace(/แล้ว(?:ก็)?\s*$/, ' ').replace(PM, ' ').replace(AM, ' ').replace(TOMORROW, ' ').replace(POLITE, ' ');
-  what = what.replace(/\s+/g, ' ').replace(LEAD, '').replace(/[\s,;:.!?]+$/, '').trim().slice(0, 140);
+  // Thai particles: strip in a loop since they can chain (e.g. "ด้วยนะค่ะ")
+  let whatPrev = '';
+  while (what !== whatPrev) { whatPrev = what; what = what.replace(THAI_POLITE, ' '); }
+  // Normalize gender: ผม (male pronoun) → ฉัน, ครับ → ค่ะ, กู → ฉัน
+  what = what.replace(/(?<=[\s]|^)ผม(?=[\s\u0E00-\u0E7F]|$)/gu, 'ฉัน')
+             .replace(/(?:ครับผม|ครับ)(?=[\s]|$)/gu, 'ค่ะ')
+             .replace(/(?<=[\s]|^)กู(?=[\s]|$)/gu, 'ฉัน');
+  what = what.replace(/\s+/g, ' ').replace(LEAD, '').replace(/[\s,;:.!?]+$/, '').trim();
+  // a pronoun left stuck in front ("ให้ผมกินน้ำ" → "ผมกินน้ำ"): the reminder is said to them, so it goes
+  what = what.replace(/^(?:ผม|ดิฉัน|ฉัน|หนู|เรา|กู)\s*(?=[\u0E01-\u0E4E])/u, '').trim().slice(0, 140);
   let at = when && when.at - now >= 5000 && when.at - now <= MAX_MS ? when.at : null;
   if (every && !at) at = now + every.ms; // no start said: the first one is one period from now
   return { at, text: what, ...(every && { every: every.ms }) };
@@ -196,12 +207,67 @@ export class Reminders {
     this.list = Array.isArray(list) ? list : [];
     this.onDue = null;
     this.firing = new Set(); // ids being shown right now
+    this.touched = new Map(); // id -> { at: when we changed it here, gone: true if removed here }
     setInterval(() => this.check(), 5000);
   }
 
-  // the list as saved (after one was cancelled from her menu)
+  // the list as saved (after one was cancelled from her menu). What was changed here in the last
+  // 30 s wins over what comes in: that copy may have been sent before the change was saved.
   sync(list) {
-    if (Array.isArray(list)) this.list = list;
+    if (!Array.isArray(list)) return;
+    const now = Date.now();
+    for (const [id, t] of this.touched) if (now - t.at > 30000) this.touched.delete(id);
+    const mine = new Map(this.list.map((r) => [r.id, r]));
+    const out = [];
+    const seen = new Set();
+    for (const r of list) {
+      const t = this.touched.get(r.id);
+      if (t?.gone) continue;           // dealt with here: not coming back
+      seen.add(r.id);
+      out.push(t && mine.has(r.id) ? mine.get(r.id) : r);
+    }
+    for (const r of this.list) {       // made here a moment ago, not in their copy yet
+      if (!seen.has(r.id) && this.touched.get(r.id) && !this.touched.get(r.id).gone) out.push(r);
+    }
+    this.list = out;
+  }
+
+  touch(id, gone = false) {
+    this.touched.set(id, { at: Date.now(), gone });
+  }
+
+  // one that says the same thing (same words), or, with none said, due about the same time
+  findDuplicate({ text = '', at = 0 } = {}) {
+    const key = sameKey(text);
+    return this.upcoming.find((r) => {
+      const k = sameKey(r.text);
+      if (key && k) return key === k || (Math.min(key.length, k.length) >= 4 && (key.includes(k) || k.includes(key)));
+      return !key && !k && Math.abs(r.at - at) < 90000;
+    }) || null;
+  }
+
+  // a new time for one (ms since the epoch)
+  setAt(id, at) {
+    this.firing.delete(id);
+    this.touch(id);
+    this.list = this.list.map((r) => (r.id === id ? { ...r, at } : r));
+    this.save();
+  }
+
+  // a later (ms > 0) or earlier (ms < 0) time for one; never earlier than 5 s from now
+  shift(id, ms) {
+    const r = this.list.find((x) => x.id === id);
+    if (!r) return null;
+    const at = Math.max(Date.now() + 5000, r.at + ms);
+    this.setAt(id, at);
+    return at;
+  }
+
+  removeAll() {
+    for (const r of this.list) this.touch(r.id, true);
+    this.firing.clear();
+    this.list = [];
+    this.save();
   }
 
   get upcoming() {
@@ -211,6 +277,7 @@ export class Reminders {
   // `every` (ms): a repeating one, which comes back by itself once it's been dealt with (complete)
   add(at, text, every = 0) {
     const r = { id: `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, at, text, made: Date.now(), ...(every > 0 && { every }) };
+    this.touch(r.id);
     this.list = [...this.list, r];
     this.save();
     return r;
@@ -223,6 +290,7 @@ export class Reminders {
     if (!r?.every) return this.remove(id);
     this.firing.delete(id);
     const next = r.at + (Math.floor((Date.now() - r.at) / r.every) + 1) * r.every;
+    this.touch(id);
     this.list = this.list.map((x) => (x.id === id ? { ...x, at: next } : x));
     this.save();
     return undefined;
@@ -230,12 +298,14 @@ export class Reminders {
 
   remove(id) {
     this.firing.delete(id);
+    this.touch(id, true);
     this.list = this.list.filter((r) => r.id !== id);
     this.save();
   }
 
   snooze(id, ms) {
     this.firing.delete(id);
+    this.touch(id);
     this.list = this.list.map((r) => (r.id === id ? { ...r, at: Date.now() + ms } : r));
     this.save();
   }
@@ -251,4 +321,110 @@ export class Reminders {
     this.firing.add(due.id);
     this.onDue(due);
   }
+}
+// two texts that mean the same thing: no spaces, no polite particles, no pronoun in front
+function sameKey(text) {
+  return String(text || '').toLowerCase()
+    .replace(/[\s,;:.!?'"’“”()\-_~]+/g, '')
+    .replace(/(?:นะคะ|นะค่ะ|ด้วย|หน่อย|นะครับ|นะ|ค่ะ|คะ|ครับ|จ้า|จ๊ะ)/gu, '')
+    .replace(/^(?:ถึงเวลา|ได้เวลา|อย่าลืม|ให้)/u, '')
+    .replace(/^(?:ผม|ดิฉัน|ฉัน|หนู|เรา|กู)(?=[\u0E01-\u0E4E])/u, '');
+}
+
+// ── a time said bare, to change a reminder: "30 วินาที", "1 ชม.", "ครึ่งชั่วโมง", "2h" ─────────────
+const NUMD = '(\\d+(?:[.,]\\d+)?|หนึ่ง|สอง|สาม|สี่|ห้า|สิบห้า|ยี่สิบ|สามสิบ|สี่สิบ|ห้าสิบ|สิบ)';
+const NO_LETTER = '(?![a-zA-Z\\u00C0-\\u024F\\u0400-\\u04FF])';
+const DUR = new RegExp(`(?<![\\d.,:])${NUMD}\\s*${UNIT}${NO_LETTER}(?:\\s*(?:et|and|y|e|и)?\\s*${NUMD}\\s*${UNIT}${NO_LETTER})?`, 'iu');
+const DUR_HALF = /ครึ่งชั่วโมง|ครึ่งชม|half an hour|demi[- ]heure|media hora|meia hora|полчаса/i;
+const DUR_HOUR_HALF = /ชั่วโมงครึ่ง|ชม\.?ครึ่ง|an hour and a half|une heure et demie/i;
+
+// How long, read off text ("30 วินาที", "1 ชม. 5 นาที"): ms or null.
+export function parseDuration(text) {
+  if (DUR_HOUR_HALF.test(text)) return 90 * 60000;
+  if (DUR_HALF.test(text)) return 30 * 60000;
+  const m = DUR.exec(text);
+  if (!m) return null;
+  let ms = number(m[1]) * unitMs(m[2]);
+  if (m[3] && m[4]) ms += number(m[3]) * unitMs(m[4]);
+  return Number.isFinite(ms) && ms >= 1000 && ms <= MAX_MS ? ms : null;
+}
+
+// When, said as a wait ("30 วินาที", "in 5 min") or a time ("18:30"): ms since the epoch, or null.
+export function parseTarget(text, now = Date.now()) {
+  if (!/[:：]|นาฬิกา|โมง|\bat\b|\bà\b/i.test(text)) {
+    const d = parseDuration(text);
+    if (d) return now + d;
+  }
+  const w = parseWhen(text, now);
+  if (w && w.at - now >= 5000 && w.at - now <= MAX_MS) return w.at;
+  const d = parseDuration(text);
+  return d ? now + d : null;
+}
+
+// "30 วินาที", "10 นาที", "1 ชม. 5 นาที", as she says it
+const SPAN_WORDS = {
+  th: { s: 'วินาที', m: 'นาที', h: 'ชม.', d: 'วัน', now: 'ตอนนี้' },
+  en: { s: 'sec', m: 'min', h: 'h', d: 'd', now: 'now' },
+  fr: { s: 's', m: 'min', h: 'h', d: 'j', now: 'maintenant' },
+  es: { s: 's', m: 'min', h: 'h', d: 'd', now: 'ahora' },
+  pt: { s: 's', m: 'min', h: 'h', d: 'd', now: 'agora' },
+  ru: { s: 'с', m: 'мин', h: 'ч', d: 'дн', now: 'сейчас' },
+};
+export function spanText(ms, lang = 'en') {
+  const w = SPAN_WORDS[lang] || SPAN_WORDS.en;
+  let s = Math.round(Math.abs(ms) / 1000);
+  if (s < 1) return w.now;
+  const parts = [];
+  for (const [unit, size] of [['d', 86400], ['h', 3600], ['m', 60], ['s', 1]]) {
+    const n = Math.floor(s / size);
+    if (n > 0) parts.push(`${n} ${w[unit]}`);
+    s -= n * size;
+    if (parts.length === 2) break;
+  }
+  return parts.join(' ');
+}
+
+// ── what you say about the reminders she already keeps ──────────────────────────────────────────
+const REMW = '(?:แจ้งเตือน|การเตือน|เตือน|นัดหมาย|reminders?|alarms?|timers?|rappels?|recordatorios?|lembretes?|напоминани[яйе]|таймер\\w*)';
+const LIST_VERB = new RegExp(`^.{0,14}?(?:ดู|เช็ก|เช็ค|แสดง|โชว์|ขอดู|อยากดู|เปิดดู|ลิสต์|list|show|see|view|check|display|voir|affiche|montre|liste|ver|muestra|mostra|покажи|список)[^\\n]{0,24}${REMW}`, 'iu');
+const LIST_NOUN = new RegExp(`(?:ตาราง|รายการ)(?:การ)?(?:แจ้ง)?เตือน|${REMW}\\s*(?:ทั้งหมด|อะไรบ้าง|กี่อัน|ที่ตั้งไว้|ที่ตั้ง|ที่มี|มีอะไร)|(?:^|\\s)(?:my|mes|mis|meus)\\s+${REMW}|(?:schedule|agenda) of ${REMW}`, 'iu');
+const CANCEL_VERB = new RegExp(`^.{0,14}?(?:ยกเลิก|ลบ|เลิก|ปิด|ล้าง|cancel|delete|remove|clear|supprime|annule|efface|elimina|borra|cancela|exclui|удали|отмени)[^\\n]{0,14}${REMW}`, 'iu');
+const ALL = /ทั้งหมด|ทุกอัน|ทุกรายการ|\ball\b|\bevery\b|\btout(?:es?)?\b|\btod[oa]s?\b|\bвсе\b/iu;
+const EDIT_VERB = /แก้ไข|แก้|เปลี่ยน|ปรับ|เลื่อน|ขยับ|\b(?:change|edit|modify|update|move|reschedule|make it|set it|modifie|cambia|modifica|altera|muda)\b|измени|перенеси/iu;
+const ADD_VERB = /เพิ่ม|บวก|ต่อเวลา|ยืด|ขยายเวลา|เลื่อน[^\n]{0,6}(?:ไป|ออกไป|อีก)|\b(?:add|extend|delay|postpone|push back|plus|ajoute|rallonge|añade|agrega|adiciona)\b|добавь|продли/iu;
+const SUB_VERB = /ลดเวลา|ลด|ร่น|หักออก|หัก|ตัดออก|เร็วขึ้น|เร่ง|\b(?:subtract|reduce|shorten|earlier|less|moins|menos)\b|меньше|сократи/iu;
+const INDEX = /(?:ข้อ|อันที่|อันดับ|ลำดับ|หมายเลข|เบอร์|#|no\.?|n°|number|item|nº)\s*(\d{1,2})(?!\d)/iu;
+
+// What you want done with the reminders she keeps, or null (ctx.recent: you've just dealt with one).
+// { op: 'list' } | { op: 'clear' } | { op: 'cancel', index?, query? } |
+// { op: 'edit', mode: 'set' | 'add' | 'sub', at | ms, index?, query? }
+export function parseRemindOps(text, { recent = false } = {}) {
+  const t = String(text || '');
+  if (CANCEL_VERB.test(t)) {
+    if (ALL.test(t)) return { op: 'clear' };
+    return { op: 'cancel', ...target(t) };
+  }
+  const when = parseTarget(t);
+  const dur = parseDuration(t);
+  if (!when && !dur && (LIST_VERB.test(t) || LIST_NOUN.test(t))) return { op: 'list' };
+  const aboutReminder = new RegExp(REMW, 'iu').test(t);
+  if ((dur || when) && (aboutReminder || recent) && (EDIT_VERB.test(t) || ADD_VERB.test(t) || SUB_VERB.test(t))) {
+    // "เพิ่ม/เลื่อนไปอีก 5 นาที": later by that; "ลด 5 นาที": earlier by that; "เปลี่ยนเป็น 30 วินาที": that, from now
+    if (dur && ADD_VERB.test(t) && !SUB_VERB.test(t)) return { op: 'edit', mode: 'add', ms: dur, ...target(t) };
+    if (dur && SUB_VERB.test(t)) return { op: 'edit', mode: 'sub', ms: dur, ...target(t) };
+    return { op: 'edit', mode: 'set', at: when || Date.now() + dur, ...target(t) };
+  }
+  return null;
+}
+
+// which one: "ข้อ 2", or some of its words ("ยกเลิกเตือนกินน้ำ")
+function target(t) {
+  const m = INDEX.exec(t);
+  if (m) return { index: Number(m[1]) };
+  const after = t.replace(new RegExp(`^[\\s\\S]*?${REMW}`, 'iu'), ' ');
+  const q = (after === t ? t : after)
+    .replace(DUR, ' ').replace(new RegExp(EDIT_VERB.source + '|' + ADD_VERB.source + '|' + SUB_VERB.source + '|' + CANCEL_VERB.source.replace(/^\^\.\{0,14\}\?/, ''), 'giu'), ' ')
+    .replace(/เป็น|ให้|ของ|อัน|หน่อย|ด้วย|นะ|ค่ะ|คะ|ครับ|เวลา|แจ้ง|เตือน|อีก|ไป|to|the|my|for|please/giu, ' ')
+    .replace(/[\d:.,]+/g, ' ').replace(/\s+/g, ' ').trim();
+  return q.length >= 2 ? { query: q } : {};
 }

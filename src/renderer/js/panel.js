@@ -21,6 +21,12 @@ const KIND_FACE = { alert: 'many', done: 'look', error: 'laugh', work: 'calm', i
 const PRIORITY = { info: 1, idle: 1, work: 2, done: 3, error: 3, report: 3, chat: 3, alert: 4, remind: 4 };
 const DECODE_STEP_MS = 28;
 const COUNT_MS = 700; // her report's numbers counting up
+const PIN_MS = 60 * 1000;     // buttons nobody clicked stop holding the panel after this
+const WAIT_MS = 20 * 1000;    // a passing line that had to wait is dropped if it's older than this when its turn comes
+
+let instance = null;
+// true while buttons (confirm / cancel / "talk to me"...) wait for a click on the panel
+export const actionsPinned = () => Boolean(instance?.isPinned('actions'));
 
 export class Panel {
   constructor({ panel, ticker, labels }) {
@@ -28,6 +34,7 @@ export class Panel {
     this.tickerEl = ticker;
     this.labels = labels;
     this.line = panel.querySelector('.panel__line');
+    this.line.style.whiteSpace = 'pre-line'; // a list is one line each
     this.stopStream(); // her chat answer, decoding in (stream)
     this.streamTo = [];
     this.portrait = panel.querySelector('.panel__face img');
@@ -57,6 +64,11 @@ export class Panel {
     this.tickerShownAt = 0;
     this.tickerTimer = null;
     this.missed = null; // a Claude message that came while you were chatting with her, shown after
+    this.waiting = null; // a passing line (device, status...) that came while buttons waited, shown after
+    this.stack = null;   // a panel with buttons that a reminder came in front of: it comes back after
+    this.actionsList = [];
+    this.actionsCb = null;
+    instance = this;
 
     // talking to her (chat.js): a line to type in, under her answer
     this.chatForm = panel.querySelector('.panel__chat');
@@ -90,6 +102,44 @@ export class Panel {
     return !this.el.hidden && !this.suspended && !this.leaving;
   }
 
+  // Two things went by this name, and the later one (a picture of the panel) replaced the first: asked for what's
+  // on the panel with no argument, it returned a Promise, which `restore` then took for a message and showed as an
+  // empty black bar. Now: with a copy function it's the picture, without it's the state to put back later.
+  snapshot(copy) {
+    return typeof copy === 'function' ? this.capture(copy) : this.stateSnapshot();
+  }
+
+  // What's on the panel now with its buttons, to put back later (a reminder came in front of it).
+  stateSnapshot() {
+    const cur = this.current;
+    if (!cur || !this.visible) return null;
+    return { chat: Boolean(cur.chat), text: this.line.textContent, actions: [...this.actionsList], cb: this.actionsCb, msg: { ...cur } };
+  }
+
+  // Put it back. A chat: her line and its buttons again. Another panel: the same message.
+  restore(snap) {
+    if (!snap || typeof snap.then === 'function' || (!snap.chat && !snap.msg)) return false; // not something stateSnapshot gave
+    if (snap.chat) {
+      if (!this.current?.chat) return false;
+      this.stream(snap.text, { done: true });
+      this.setActions(snap.actions, snap.cb);
+      return true;
+    }
+    if (this.visible && this.current?.kind === 'remind') return false;
+    return Boolean(this.say({ ...snap.msg }));
+  }
+
+  // Is something here that the next line must not step on? 'actions': buttons not yet clicked
+  // (a confirm / cancel, "talk to me"); 'chat': a chat with her; none: either.
+  isPinned(kind) {
+    const cur = this.current;
+    if (!cur || !this.visible) return false;
+    const buttons = Boolean(cur.actions?.length) && !cur.answered && performance.now() - (cur.actionsAt ?? cur.at) < PIN_MS;
+    if (kind === 'actions') return buttons;
+    if (kind === 'chat') return Boolean(cur.chat);
+    return buttons || Boolean(cur.chat);
+  }
+
   // Message: { kind, line, tag, quote, reply, summary, log: [{verb, target, error}], actions, guide,
   //            hold (ms | null for sticky) }
   // reply: Claude's whole answer, in a block that scrolls
@@ -105,6 +155,12 @@ export class Panel {
   // progress: a bar under the line, 0..1 (a download)
   // onLeave: () => void, when this message goes (closed, timed out or replaced)
   say(msg) {
+    if (!msg || typeof msg !== 'object') return false;
+    if (!msg.kind) {
+      const shows = ['line', 'quote', 'reply', 'report', 'chat', 'summary', 'log', 'actions'].some((k) => (Array.isArray(msg[k]) ? msg[k].length : msg[k]));
+      if (!shows) return false; // nothing to show: no empty panel
+      msg = { ...msg, kind: 'info' };
+    }
     const cur = this.current;
     // don't step on something more important that just appeared (one step of her guide follows another)
     const steps = cur?.guide && msg.guide;
@@ -121,9 +177,18 @@ export class Panel {
       if (PRIORITY[msg.kind] >= 3) this.missed = { ...msg, missedAt: performance.now() };
       return false;
     }
+    // nor on buttons still waiting for your click: a passing line (device plugged in, status, small
+    // talk) gives way and, if it's a plain one, is shown once they're gone. Anything more (a chat,
+    // Claude finishing, a permission prompt, a reminder) still goes through.
+    if (cur && this.visible && !steps && PRIORITY[msg.kind] <= 2 && this.isPinned('actions')) {
+      if (PRIORITY[msg.kind] <= 1 && !msg.actions?.length) this.waiting = { ...msg, waitedAt: performance.now() };
+      return false;
+    }
+    const covered = cur && this.visible && msg.kind === 'remind' && cur.kind !== 'remind' && !cur.chat && this.isPinned('actions');
+    if (covered) this.stack = { msg: { ...cur }, at: performance.now() };
     if (cur && this.visible) this.onDismiss?.(cur);
-    cur?.onLeave?.();
-    this.current = { ...msg, at: performance.now() };
+    if (!covered) cur?.onLeave?.(); // covered: it isn't gone, it comes back
+    this.current = { ...msg, at: performance.now(), actionsAt: performance.now(), answered: false };
     clearTimeout(this.hideTimer);
 
     this.el.dataset.kind = msg.kind;
@@ -250,6 +315,8 @@ export class Panel {
   }
 
   renderActions(actions = [], onAction = null) {
+    this.actionsList = actions;
+    this.actionsCb = onAction;
     this.actions.replaceChildren(...actions.map(({ id, label, primary }) => {
       const button = document.createElement('button');
       button.type = 'button';
@@ -258,6 +325,7 @@ export class Panel {
       button.textContent = label;
       button.addEventListener('click', (e) => {
         e.stopPropagation(); // a click on the panel itself closes it
+        if (this.current) this.current.answered = true; // clicked: these buttons no longer hold the panel
         if (onAction) onAction(id);
         else this.onAction?.(id);
       });
@@ -270,6 +338,8 @@ export class Panel {
   setActions(actions, onAction) {
     if (!this.current) return;
     this.current.actions = actions;
+    this.current.answered = false;
+    this.current.actionsAt = performance.now();
     this.renderActions(actions, onAction);
     this.place();
   }
@@ -381,7 +451,7 @@ export class Panel {
 
   // A picture of the panel as it is (her report card), handed to `copy` as a rect of the overlay:
   // on a dark plate of its own, without its buttons, so it reads anywhere it's pasted.
-  async snapshot(copy) {
+  async capture(copy) {
     this.el.classList.add('is-capturing');
     const frame = () => new Promise((r) => requestAnimationFrame(r));
     await frame();
@@ -445,6 +515,22 @@ export class Panel {
     const missed = gone?.chat && this.missed;
     this.missed = null;
     if (missed && performance.now() - missed.missedAt < 120000) setTimeout(() => this.say(missed), 400);
+    // the panel with buttons a reminder came in front of
+    const stack = this.stack;
+    this.stack = null;
+    if (stack && performance.now() - stack.at < 3 * 60 * 1000) {
+      setTimeout(() => {
+        if (!this.visible) this.say({ ...stack.msg });
+      }, 900);
+    }
+    // a passing line that waited for the buttons to go
+    const waiting = this.waiting;
+    this.waiting = null;
+    if (waiting && performance.now() - waiting.waitedAt < WAIT_MS) {
+      setTimeout(() => {
+        if (!this.visible) this.say(waiting);
+      }, 700);
+    }
     if (reducedMotion.matches) {
       this.el.hidden = true;
     } else {

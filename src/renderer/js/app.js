@@ -454,33 +454,55 @@ async function boot() {
     const time = clock(r.at, brain.lang);
     const missed = r.at < startedAt - 60000;
     const name = brain.custom?.userName ? ` ${brain.custom.userName}` : ' นาย'; // what she calls you (Thai lines use {name})
+    // Thai lines say "ถึงเวลา{text}แล้ว": a text that already starts that way, or with a pronoun, loses it
+    const said = brain.lang === 'th' ? String(r.text || '').replace(/^(?:ถึงเวลา|ได้เวลา|อย่าลืม)\s*/, '').replace(/^(?:ผม|ฉัน|หนู|เรา)\s*(?=[\u0E01-\u0E4E])/, '').trim() : r.text;
     const line = missed
-      ? fmt(r.text ? t.missed : t.missedBare, { text: r.text, time, name })
-      : fmt(pick(r.text ? t.now : t.nowBare), { text: r.text, name });
+      ? fmt(said ? t.missed : t.missedBare, { text: said, time, name })
+      : fmt(pick(said ? t.now : t.nowBare), { text: said, name });
     let answered = false;
+    // her reply goes where the reminder was shown: in the chat if it's the chat on the panel, else a line
+    const reply = (text) => {
+      if (chat.open && panel.current?.chat) chat.interject(text, [], null);
+      else panel.say({ kind: 'info', face: 'smug', line: text, hold: 2500 });
+    };
     const onAction = (id) => {
+      if (answered) return; // a second click on the same button does nothing
       answered = true;
       if (id === 'snooze') {
         reminders.snooze(r.id, SNOOZE_MS);
         panel.setActions([]);
-        if (chat.open) chat.interject(t.snoozed, [], null);
-        else panel.say({ kind: 'info', face: 'smug', line: t.snoozed, hold: 2500 });
+        reply(t.snoozed);
         return;
       }
       reminders.complete(r.id); // a repeating one comes back on its own
       bond.add('remind', 2);
       panel.setActions([]);
-      if (chat.open) chat.interject(pick(t.doneLine), [], null);
-      else panel.say({ kind: 'info', face: 'smug', line: pick(t.doneLine), hold: 2500 });
+      reply(pick(t.doneLine));
     };
     const actions = [{ id: 'done', label: t.done, primary: true }, { id: 'snooze', label: t.snooze }];
     voice.play('remind');
-    for (let i = 0; chat.open && chat.turn && i < 60; i++) await wait(500); // her answer first
-    if (chat.open && chat.interject(line, actions, onAction)) {
-      // read in the chat: closed (or talked over) without a button, it counts as seen
-      while (!answered && chat.open) await wait(1000);
-      if (!answered) reminders.complete(r.id);
-      return;
+    // In her chat: it comes in front as a message of its own, even over a list or a confirm / cancel
+    // (they come back afterwards), as soon as she's done answering. Never on top of the chat itself.
+    if (chat.open) {
+      let inChat = false;
+      for (let i = 0; chat.open && !inChat && i < 240; i++) {
+        inChat = chat.interject(line, actions, onAction);
+        if (!inChat) await wait(500); // her answer first
+      }
+      if (inChat) {
+        // read in the chat: talked over (the buttons gone) or the chat closed without a button counts as seen
+        const shownAt = performance.now();
+        const stillAsked = () => panel.current?.chat && panel.current.actions?.some((a) => a.id === 'done');
+        while (!answered && chat.open) {
+          await wait(800);
+          if (performance.now() - shownAt > 2500 && !stillAsked()) break;
+        }
+        if (!answered) {
+          answered = true;
+          reminders.complete(r.id);
+        }
+        return;
+      }
     }
     if (capri.stowed) {
       host.setConfig({ visible: true });
@@ -496,6 +518,7 @@ async function boot() {
       // closed without an answer: seen, if it was up long enough to read; else back in a couple of minutes
       onLeave: () => {
         if (answered) return;
+        answered = true;
         if (performance.now() - shownAt > 2500) reminders.complete(r.id);
         else reminders.snooze(r.id, 2 * 60 * 1000);
       },
@@ -829,6 +852,8 @@ async function boot() {
         break;
       case 'forget': // "Forget our conversations" in her menu, maybe with her chat open
         chat.history = [];
+        chat.summary = '';
+        try { host.saveSummary(''); } catch { /* non-fatal */ }
         break;
       case 'chat': // "Talk to her" in her menu
         chat.start();

@@ -160,7 +160,8 @@ const OWN = { claude: ['claude'], codex: ['codex'], agy: ['gemini'] };
 
 const NOTICE_AFTER = 4000;           // in front this long: she notices
 const ACT_AFTER = 45000;             // this long on it, lately: she does something about it
-const NOTICE_EVERY = 20 * 60 * 1000; // per AI
+const NOTICE_EVERY = 10 * 60 * 1000; // per AI…
+const NOTICE_AGAIN_AWAY = 4 * 60 * 1000; // …or sooner, if you went away from it for a while and came back
 const ACT_EVERY = 40 * 60 * 1000;
 const ACTS_A_DAY = 3;
 const SULK_MS = 5 * 60 * 1000;
@@ -176,6 +177,8 @@ export class Jealousy {
     this.guide = guide;
     this.enabled = true;  // her menu: Jealous of other AIs
     this.front = null;    // the AI in front: { key, id, since }
+    this.goneAt = 0;      // when the AI in front last stopped showing in the title (0: it still does)
+    this.seenAt = {};     // key -> when it was last in front
     this.lately = {};     // key -> ms on it lately (forgotten slowly)
     this.noticed = {};    // key -> when she last said something about it
     this.acted = { at: 0, date: today(), n: 0 };
@@ -194,15 +197,30 @@ export class Jealousy {
   }
 
   // The first of these AIs (keys) that's a rival of hers, or null.
-  rivalOf(keys) {
-    const own = OWN[this.brain.assistant] || [];
+  // `web`: the window in front is a browser. The one she watches is her own only as an app (Claude
+  // Code, Codex, Antigravity): claude.ai or gemini.google.com in a tab is another AI to her.
+  rivalOf(keys, web = false) {
+    const own = web ? [] : OWN[this.brain.assistant] || [];
     return (keys || []).find((k) => RIVALS[k] && !own.includes(k)) || null;
   }
 
   onWindows(data) {
-    const key = this.enabled ? this.rivalOf(data.ai) : null;
+    if (!this.enabled) {
+      this.front = null;
+      this.goneAt = 0;
+      return;
+    }
+    const key = this.rivalOf(data.ai, data.aiweb);
+    if (!key) {
+      // the title flickers while you switch tabs or a page loads: she lets go only if it stays gone (tick)
+      if (this.front && !this.goneAt) this.goneAt = Date.now();
+      return;
+    }
+    this.goneAt = 0;
     if (key === this.front?.key && data.fg === this.front.id) return;
-    this.front = key ? { key, id: data.fg, since: Date.now() } : null;
+    // back on one you'd left a few minutes ago: she can notice it again
+    if (Date.now() - (this.seenAt[key] || 0) > NOTICE_AGAIN_AWAY) this.noticed[key] = 0;
+    this.front = { key, id: data.fg, since: Date.now() };
   }
 
   // Codex at work while she watches Claude Code (its hooks still reach her): like seeing it in front.
@@ -230,8 +248,14 @@ export class Jealousy {
     const f = this.front;
     for (const k of Object.keys(this.lately)) if (k !== f?.key) this.lately[k] *= 0.9989; // about half every 10 min
     if (this.sulk && now > this.sulk.until) this.sulk = null;
-    if (!f) return;
+    if (this.goneAt && now - this.goneAt >= 2500) {
+      this.front = null;
+      this.goneAt = 0;
+      return;
+    }
+    if (!f || this.goneAt) return;
     this.lately[f.key] = (this.lately[f.key] || 0) + 1000;
+    this.seenAt[f.key] = now;
     this.count(f.key, 1000);
     if (!this.free()) return;
     if (this.acted.date !== today()) this.acted = { at: 0, date: today(), n: 0 };
@@ -249,6 +273,7 @@ export class Jealousy {
     if (capri.busy || capri.dragging || capri.stowed || capri.dormant || capri.hidden || capri.act) return false;
     if (!['stand', 'sit'].includes(capri.stance) || capri.mode === 'alert' || capri.mode === 'sleep' || capri.pointing) return false;
     if (this.chat.open || this.guide.running) return false;
+    if (panel.isPinned?.('actions')) return false; // buttons waiting for a click: she doesn't hide or cover them
     return !panel.visible || ['idle', 'info'].includes(panel.current?.kind);
   }
 

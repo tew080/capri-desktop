@@ -873,10 +873,26 @@ export class FxLayer {
     ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
     this.items = this.items.filter((it) => {
       const alive = now - it.born < it.life;
-      if (!alive) it.done?.();
+      if (!alive) {
+        try { it.done?.(); } catch (err) { console.warn('[capri] effect callback failed:', err?.message); }
+      }
       return alive;
     });
-    for (const it of this.items) this.draw(it, (now - it.born) / it.life, dt, now);
+    // never let effects pile up (a burst of events): the oldest go first
+    if (this.items.length > 900) this.items = this.items.slice(-900);
+    // one effect that can't be drawn (a bad number, a point that's gone) is dropped on its own: it must not take the
+    // whole loop with it, which would leave every effect after it dead until she restarts
+    for (const it of this.items) {
+      try {
+        this.draw(it, (now - it.born) / it.life, dt, now);
+      } catch (err) {
+        it.life = 0;
+        if (!it.failed) {
+          it.failed = true;
+          console.warn('[capri] effect dropped:', it.type, err?.message);
+        }
+      }
+    }
 
     if (this.items.length) {
       requestAnimationFrame((t) => this.frame(t));
