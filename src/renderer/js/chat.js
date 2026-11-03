@@ -113,6 +113,40 @@ const CLEAR_RAM_ASK = /(?:เคลียร์\s*แรม|เคลียแ�
 // weather: "อากาศเป็นไงวันนี้", "ฝนตกไหม", "what's the weather" — never the PC's own temperature
 // "จำลอง brute force ให้ดู", "แฮกเว็บปลอมให้ดูหน่อย", "simulate a brute force on a fake login": her hack DEMO (hacksim.js: a prop page, nothing real)
 const HACK_ASK = /brute\s*-?\s*force|บรูท\s*ฟอร์ซ|(?:จำลอง|เล่น|โชว์|แสดง|ทำให้ดู|ลอง).{0,14}(?:แฮก|แฮ็ก|เจาะ|เดา\s*(?:รหัส|password)|login\s*attack)|(?:แฮก|แฮ็ก|เจาะ|เดา).{0,10}(?:เว็บปลอม|หน้า\s*login\s*ปลอม|หน้าล็อกอินปลอม)|(?:simulat|fake|demo).{0,20}(?:hack|brute|login\s*attack|password\s*crack)|hack\s*(?:demo|sim)/i;
+// Nmap / Wireshark (netscan.js): her own PC and your own network only. "เช็คพอร์ตเปิดในเครื่อง", "ใครอยู่ใน wifi", "จับแพ็กเก็ต 15 วิ", "nmap 192.168.1.20"
+const NET_ASK = /nmap|wireshark|tshark|(?:สแกน|scan).{0,6}\d{1,3}(?:\.\d{1,3}){3}|(?:สแกน|scan|ตรวจ|เช็ค|เช็ก|ดู|check).{0,16}(?:พอร์ต|port|วง\s*lan|\blan\b|wi-?fi|ไวไฟ|เครือข่าย|เน็ตเวิร์ก|network)|พอร์ต.{0,10}(?:เปิด|ไหน|ไหม)|(?:ใคร|อุปกรณ์|เครื่องไหน).{0,12}(?:อยู่ใน|ใช้|ต่อ).{0,8}(?:wi-?fi|ไวไฟ|เน็ต|lan|เราเตอร์|router)|(?:จับ|ดัก|ดู|capture|sniff).{0,10}(?:แพ็ก?เก็ต|packet|ทราฟฟิก|traffic)|(?:ใคร|แอปไหน|โปรแกรมไหน).{0,10}(?:ส่งข้อมูล|คุยกับ)|(?:สแกน|scan|ตรวจ|เช็ค|เช็ก).{0,10}(?:เราเตอร์|router|gateway|ประตู)|(?:หา|ดู|เช็ค|ตรวจ).{0,10}(?:ช่องโหว่|vulnerability|vuln|ความเสี่ยง)|(?:วัด|ทดสอบ|เช็ค|ดู).{0,12}(?:ความเร็ว|speed|bandwidth|แบนด์วิดธ์|throughput)|os.{0,8}(?:detection|detect|เดา|ระบุ|ตรวจ)|(?:เดา|ระบุ|detect).{0,8}os|(?:สแกน|scan).{0,6}(?:พอร์ต|port).{0,16}(?:\d{1,5}[-–]\d{1,5})/i;
+const NET_CAPTURE = /wireshark|tshark|แพ็ก?เก็ต|packet|ทราฟฟิก|traffic|sniff|ส่งข้อมูล|คุยกับ/i;
+const NET_LAN = /\blan\b|เครือข่าย|network|wi-?fi|ไวไฟ|เราเตอร์|router|ใคร|อุปกรณ์|ในวง|ในบ้าน|ในเครือข่าย/i;
+const NET_SELF = /ในเครื่อง|เครื่องนี้|เครื่องฉัน|เครื่องเรา|localhost|my pc|this pc/i;
+const NET_IP = /\b(\d{1,3}(?:\.\d{1,3}){3})\b/;
+const NET_SECONDS = /(\d{1,2})\s*(?:วินาที|วิ|s\b|sec)/i;
+const NET_GATEWAY = /เราเตอร์|router|gateway|ประตูเครือข่าย/i;
+const NET_VULN = /ช่องโหว่|vulnerability|vuln|ความเสี่ยง|security|ความปลอดภัย/i;
+const NET_BW = /ความเร็ว|speed|bandwidth|แบนด์วิดธ์|throughput|อัตราส่ง/i;
+const NET_OS = /\bos\b|ระบบปฏิบัติการ|operating system|os detection|เดา\s*os|ระบุ\s*os/i;
+const NET_PORTRANGE = /(\d{1,5})\s*[-–]\s*(\d{1,5})/;
+const FIX_HISTORY = /ประวัติ(?:การ)?แก้(?:ไข)?|(?:ย้อนกลับ|ยกเลิก).{0,10}(?:การแก้|ที่แก้|ที่เธอแก้|ที่ฉันให้แก้)|ล็อก(?:การ)?แก้|(?:undo|revert|roll\s*back).{0,14}(?:fix|change)|fix\s*(?:log|history)/i;
+function netAsk(text) {
+  if (FIX_HISTORY.test(text)) return { what: 'fixes' };
+  if (!NET_ASK.test(text)) return null;
+  const ip = NET_IP.exec(text)?.[1];
+  const secs = Number(NET_SECONDS.exec(text)?.[1]) || 15;
+  if (NET_CAPTURE.test(text)) return { what: `net:capture:${secs}` };
+  if (NET_BW.test(text)) return { what: `net:bandwidth:${secs}` };
+  if (NET_VULN.test(text)) {
+    if (ip) return { what: `net:vuln:${ip}` };
+    return { what: 'net:vuln:self' };
+  }
+  if (NET_OS.test(text) && ip) return { what: `net:os:${ip}` };
+  if (NET_GATEWAY.test(text) && !ip) return { what: 'net:gateway' };
+  if (ip) {
+    const pr = NET_PORTRANGE.exec(text);
+    if (pr) return { what: `net:ports:${ip}:${pr[1]}-${pr[2]}` };
+    return { what: `net:host:${ip}` };
+  }
+  if (NET_LAN.test(text) && !NET_SELF.test(text)) return { what: 'net:lan' };
+  return { what: 'net' };
+}
 const WEATHER_ASK = /อากาศ|ฝนตก|ฝนจะตก|ร้อนไหม|หนาวไหม|อุณหภูมิข้างนอก|\bweather\b|will it rain|is it raining|temperature outside|forecast/i;
 const WEATHER_NOT = /เครื่อง|คอม|พีซี|\bcpu\b|\bgpu\b|\bpc\b|computer|ซีพียู|การ์ดจอ/i;
 const WEATHER_PLACE = /(?:ที่|ใน|ของ|\bat\b|\bin\b|\bfor\b)\s*([\p{L}\p{M}][\p{L}\p{M} ]{1,30}?)\s*(?:วันนี้|ตอนนี้|หน่อย|ไหม|[?!.]|$)/iu;
@@ -297,6 +331,8 @@ export class Chat {
     this.host = host;
     this.brain = brain;
     this.history = []; // your chats with her, [{ role, content }], kept by main.js across restarts
+    this.shareOk = false; // may her model read what she finds on this PC (a model on this PC only: main.js decides, again, for every request)
+    this.netNote = '';
     this.summary = ''; // rolling summary of turns that slid out of REMEMBER (survives restarts via config)
     this.summarising = false; // guard: only one background summarise at a time
     this.summaryId = 0;
@@ -470,10 +506,12 @@ export class Chat {
     // "what did I ask you?", "what have we talked about?": the facts come from the real log (never from the
     // model's memory, which a 7B model invents); the model then says them in her own voice, and the answer is
     // checked against the facts. If it strays, the plain retrieved answer is shown instead.
+    await this.refreshShare(); // first: everything below that may reach a model depends on it
     const recall = this.agent ? null : recallIntent(text);
     const history0 = this.history.slice(0, -1);
     const recallOpts = { summary: this.summary, lang: this.brain.lang, name: this.brain.custom?.userName || '', partial: this.history.length >= KEEP };
-    const facts = recall && recall.kind !== 'general' ? recallFacts(recall, history0) : [];
+    // the facts go to her model, so they come only from what that model may read; the plain answer is shown here, on screen
+    const facts = recall && recall.kind !== 'general' ? recallFacts(recall, this.visible(history0)) : [];
     const plain = recall && recall.kind !== 'general' ? answerRecall(recall, history0, recallOpts) : null;
     if (plain && !facts.length) {
       // nothing to recall yet: said plainly
@@ -506,6 +544,13 @@ export class Chat {
       if (asked.kind === 'close') {
         this.turn = 0; this.panel.setChatBusy(false);
         this.offerClose(asked.name, '…');
+        return;
+      }
+      if (asked.kind === 'net') {
+        this.turn = 0; this.panel.setChatBusy(false);
+        const q = this.history.at(-1);
+        if (q?.role === 'user') q.private = true; // "scan 192.168.1.20": never goes to a model that is not on this PC
+        this.runNet(asked.what);
         return;
       }
       if (asked.kind === 'status') {
@@ -597,10 +642,10 @@ export class Chat {
     const shots = (this.agent || recalling) ? [] : (SHOTS[this.brain.lang] || []).flatMap(([q, a]) => [{ role: 'user', content: q }, { role: 'assistant', content: a.replace(/\{name\}/g, who) }]);
     // inject the rolling summary (if any) as a second system message so the model knows what
     // was said before the sliding window — without spending full tokens on verbatim old turns
-    const summaryMsg = (!this.agent && this.summary)
-      ? [{ role: 'system', content: `[สรุปคร่าว ๆ ของบทสนทนาจริงก่อนหน้านี้ (ไม่ใช่ตัวอย่าง) — ใช้เป็นบริบท อย่าพูดซ้ำตรง ๆ]:\n${this.summary}` }]
+    const summaryMsg = (!this.agent && this.safeSummary())
+      ? [{ role: 'system', content: `[สรุปคร่าว ๆ ของบทสนทนาจริงก่อนหน้านี้ (ไม่ใช่ตัวอย่าง) — ใช้เป็นบริบท อย่าพูดซ้ำตรง ๆ]:\n${this.safeSummary()}` }]
       : [];
-    const messages = [{ role: 'system', content: this.persona(text) }, ...summaryMsg, ...shots, ...this.history.slice(-REMEMBER)];
+    const messages = [{ role: 'system', content: this.persona(text) }, ...summaryMsg, ...shots, ...this.visible(this.history).slice(-REMEMBER)];
     // Her mood (angry, sulking…) and her language, said again right by your message, for this answer
     // only. Small local models mostly go by the last thing they read: up in her prompt alone, they
     // forget it (and answer in English after a conversation in English).
@@ -701,7 +746,7 @@ export class Chat {
     const res = await this.host.lookSay({
       id: snap.id,
       persona: this.lookPersona(),
-      history: this.history.slice(-REMEMBER, -1),
+      history: this.visible(this.history.slice(-REMEMBER, -1)),
       prompt: `${text}\n\n(Note for you, never repeat it: the picture is the user's screen right now; a small figure with a big red mane on it is you. Answer about what you really see, in character. ${this.languageNote()})`,
     });
     if (!res.ok) {
@@ -735,6 +780,15 @@ export class Chat {
     return line;
   }
 
+  // her model reads scan results only if it runs on this PC. The messages about a scan are flagged `private`: anything
+  // else (a key, an online or cloud model, Claude Code) never gets them, in her prompt, her summary or her recall notes.
+  async refreshShare() { this.shareOk = Boolean((await this.host.modelShare().catch(() => null))?.ok); }
+  visible(list) { return this.shareOk ? list : list.filter((m) => !m.private); }
+  // the rolling summary is never written from scan messages (summarizeOld), but one saved by an older version may hold some:
+  // a model that is not on this PC does not get it
+  safeSummary() { return this.shareOk || !SCAN_TRACE.test(this.summary || '') ? this.summary : ''; }
+  rememberPrivate(message) { this.remember({ ...message, private: true }); }
+
   // an answer of hers, kept with your message before it
   remember(message) {
     this.history.push(message);
@@ -752,7 +806,8 @@ export class Chat {
     if (edge <= 0) return;
     const from = (this.summaryMark ? this.history.findLastIndex((m) => keyOf(m) === this.summaryMark) : -1) + 1;
     if (edge - from < SUMMARIZE_AFTER) return;  // not worth a round-trip yet
-    const chunk = this.history.slice(from, edge);
+    // never from scan messages, even when a local model may read them now: the summary is kept and could be sent to another model later
+    const chunk = this.history.slice(from, edge).filter((m) => !m.private && !SCAN_TRACE.test(String(m.content || '')));
     const mark = keyOf(this.history[edge - 1]);
     const real = pairs(chunk);                  // without the questions about the conversation itself
     if (!real.length) { this.summaryMark = mark; return; }
@@ -807,6 +862,8 @@ export class Chat {
     const memo = MEMO_ASK.exec(text)?.[1]?.trim();
     if (memo) return { kind: 'memo', text: memo };
     if (this.look && LOOK_ASK.test(text)) return { kind: 'look' };
+    const net = netAsk(text);
+    if (net) return { kind: 'net', what: net.what };
     if (WEATHER_ASK.test(text) && !WEATHER_NOT.test(text)) return { kind: 'weather', place: weatherPlace(text) };
     if (SHOT_ASK.test(text)) return { kind: 'shot' };
     const roblox = robloxGame(text);
@@ -1231,6 +1288,327 @@ export class Chat {
     this.remember({ role: 'assistant', content: line });
   }
 
+  // Nmap / Wireshark on her own PC and your own network (netscan.js does the scan and refuses anything else).
+  // Her plain words about it are written here from the result. Her model reads it too, but only one running on this PC.
+  async runNet(what = 'net') {
+    if (what === 'fixes') return this.runFixHistory();
+    const cfg = await this.host.getConfig().catch(() => ({}));
+    if (!cfg.netAsked) {
+      this.panel.setFace('look');
+      this.panel.stream(
+        'ก่อนนะ choom: ฉันจะใช้ Nmap สแกนเฉพาะเครื่องคุณกับวง LAN ส่วนตัว และใช้ Wireshark (tshark) ดูทราฟฟิกของเครื่องนี้สั้น ๆ '
+        + 'ฉันอ่านแค่ภาพรวม (โปรโตคอล ชื่อโดเมน ปลายทาง) ไม่เก็บแพ็กเก็ตลงดิสก์ ถ้าโมเดลของฉันรันอยู่ในเครื่องนี้ ผลจะให้มันช่วยอ่านได้ (ปิดได้ในเมนู) '
+        + 'แต่ถ้าฉันใช้ API key หรือโมเดลออนไลน์ ผลสแกนจะไม่ถูกส่งออกไปเด็ดขาด ใช้เฉพาะเครือข่ายของคุณเองนะ ตกลงไหม?',
+        { done: true },
+      );
+      this.panel.setActions([{ id: 'yes', label: 'ได้เลย', primary: true }, { id: 'no', label: 'ยังก่อน' }], async (choice) => {
+        this.panel.setActions([]);
+        if (choice !== 'yes') {
+          this.panel.setFace('aside');
+          this.panel.stream('โอเค ไม่สแกนก็ได้ ถ้าเปลี่ยนใจบอกฉันนะ', { done: true });
+          return;
+        }
+        await this.host.setConfig({ netAsked: true });
+        this.runNet(what);
+      });
+      return;
+    }
+    const tools = await this.host.netTools().catch(() => ({}));
+    const capture = what.startsWith('net:capture');
+    const isBandwidth = what.startsWith('net:bandwidth');
+    const needsTshark = capture || isBandwidth;
+    if (needsTshark ? !tools.tshark : !tools.nmap) {
+      const name = needsTshark ? 'Wireshark (tshark)' : 'Nmap';
+      const site = needsTshark ? 'wireshark.org' : 'nmap.org';
+      this.panel.setFace('aside');
+      this.panel.stream(`ฉันหา ${name} ในเครื่องไม่เจอ choom ติดตั้งจาก ${site} แล้วลองใหม่นะ`, { done: true });
+      return;
+    }
+    this.zap();
+    this.panel.setFace('look');
+    this.netNote = '';
+    const parts = what.split(':');
+    const netKind = parts[1] || 'self';
+    const secs = parts[2];
+    const isCaptureLike = capture || isBandwidth;
+    const loadingMsg = {
+      capture:   `ฟังทราฟฟิกของเครื่องนี้ ${secs || 15} วินาทีนะ choom…`,
+      bandwidth: `วัดความเร็วจริง ๆ ${secs || 10} วินาทีนะ รอแป๊บ…`,
+      gateway:   'กำลังสแกนเราเตอร์ รอแป๊บนะ…',
+      os:        `กำลังเดา OS ของ ${parts[2] || '?'} อยู่…`,
+      vuln:      `ตรวจสอบช่องโหว่เบื้องต้น ${parts[2] || 'เครื่องนี้'} อยู่นะ ใช้เวลาซักครู่…`,
+      ports:     `สแกนพอร์ต ${parts[3] || '?'} ที่ ${parts[2] || '?'} อยู่…`,
+    }[netKind] || 'กำลังสแกนให้ รอแป๊บนะ…';
+    this.panel.stream(loadingMsg, { done: false });
+    if (isCaptureLike) this.panel.setActions([{ id: 'stop', label: 'หยุด' }], () => this.host.netCancel());
+    let res = null;
+    try {
+      res = await this.host.pcStatus(what);
+    } catch {
+      res = null;
+    }
+    this.panel.setActions([]);
+    const { line, face } = this.netSummary(res);
+    this.panel.setFace(face);
+    this.panel.stream(line, { done: true });
+    this.rememberPrivate({ role: 'assistant', content: line });
+    if (!res?.ok || !res.text) return;
+    try {
+      await this.host.showStatusCard({ text: res.text, data: res.data || {}, view: 'net' });
+    } catch (err) {
+      console.warn('[capri] net card error', err);
+    }
+    // her local model reads the result (main.js checks again that it runs on this PC: a key or an online model gets nothing)
+    const where = await this.host.lookWhere().catch(() => ({}));
+    if (where.local && cfg.netAI !== false) {
+      const view = await this.netAnalysis(res.text);
+      this.netNote = view || '';
+      if (view) {
+        const full = `${line}\n\n${view}`;
+        this.panel.stream(full, { done: true });
+        this.history.pop(); // the plain line made above: the same one, with her reading of it
+        this.rememberPrivate({ role: 'assistant', content: full });
+      }
+    }
+    // the security check of THIS PC: she offers to fix what she can (every fix is logged with its reason, and can be undone)
+    if (res.data?.net?.kind === 'vuln' && res.data.net.local) {
+      await this.offerFixes(res.data.net);
+      return;
+    }
+    // a LAN scan: she can play her demo on one of the devices found (still her fake page, nothing is sent to it)
+    const devices = res.data?.net?.kind === 'lan' ? res.data.net.hosts.slice(0, 3) : [];
+    if (devices.length && this.onHack) {
+      const label = (d) => (d.name || d.vendor || d.ip).toString().slice(0, 22);
+      this.panel.setActions(
+        [...devices.map((d) => ({ id: d.ip, label: `ฉากโชว์: ${label(d)}` })), { id: 'no', label: 'ไม่เอา' }],
+        (choice) => {
+          this.panel.setActions([]);
+          const d = devices.find((x) => x.ip === choice);
+          if (d) this.onHack({ label: `${label(d)} · ${d.ip}` });
+        },
+      );
+    }
+  }
+
+  // ---- fixing what the security check found. She never runs anything herself: main.js (remediate.js) only accepts the
+  // ids of fixes it proposed from a real scan, writes the reason to a private log first, and Windows asks for permission (UAC).
+
+  // a question with buttons, answered through a promise
+  askChoice(line, actions, face = 'look') {
+    return new Promise((resolve) => {
+      this.panel.setFace(face);
+      this.panel.stream(line, { done: true });
+      this.panel.setActions(actions, (choice) => { this.panel.setActions([]); resolve(choice); });
+    });
+  }
+
+  sayNet(line, face = 'smug') {
+    this.panel.setFace(face);
+    this.panel.stream(line, { done: true });
+    this.rememberPrivate({ role: 'assistant', content: line });
+  }
+
+  fixError(code) {
+    return {
+      'uac-cancelled': 'คุณไม่อนุญาตที่หน้าต่างสิทธิ์ผู้ดูแล (UAC) ฉันเลยไม่ได้เปลี่ยนอะไร',
+      unsupported: 'การแก้อัตโนมัติรองรับเฉพาะ Windows',
+      expired: 'ผลสแกนเก่าเกินไป สแกนใหม่อีกครั้งก่อนนะ',
+      'no-reason': 'ข้อนี้ไม่มีเหตุผลที่พอ ฉันจึงไม่แตะ',
+      'not-applied': 'ข้อนี้ยังไม่เคยถูกแก้ จึงไม่มีอะไรให้ย้อน',
+      'already-undone': 'ย้อนกลับไปแล้ว',
+      'no-result': 'ไม่ได้รับผลจากตัวที่แก้ (อาจถูกยกเลิกกลางคัน)',
+      invalid: 'ข้อนี้ไม่อยู่ในรายการที่อนุญาตให้แก้ ฉันจึงไม่แตะ',
+      'not-confirmed': 'ยังไม่ได้ยืนยัน ฉันเลยไม่ได้เปลี่ยนอะไร',
+      nothing: 'ไม่มีข้อไหนที่แก้ได้ตอนนี้',
+      'too-big': 'ชุดแก้ใหญ่เกินไป ลองเลือกทีละข้อ',
+    }[code] || `ทำไม่สำเร็จ (${code || 'ไม่ทราบสาเหตุ'})`;
+  }
+
+  fixExplain(f, fx) {
+    return `ข้อ: ${f.title}\nตอนนี้: ${f.doing?.[0] || '-'}\nใครใช้อยู่: ${f.usedBy?.text || '-'}\nทำไมเสี่ยง: ${f.why}\n\nถ้าแก้: ${fx.effect}\n`
+      + `${fx.risk === 'medium' ? `⚠ ระวัง: ${fx.warn}` : `ผลกระทบ: ${fx.warn || 'น้อย'}`}\nย้อนกลับได้ทุกเมื่อ`;
+  }
+
+  async offerFixes(net) {
+    const items = (net.findings || []).filter((f) => f.fixes?.length);
+    if (!items.length) return;
+    const real = (net.findings || []).filter((f) => f.severity !== 'info').length;
+    const first = await this.askChoice(
+      `ใน ${real} ข้อ มี ${items.length} ข้อที่ฉันแก้ให้ได้ ทุกข้อย้อนกลับได้ และฉันจะจดเหตุผลกับสิ่งที่เปลี่ยนไว้ในล็อกที่เปิดได้เฉพาะบัญชี Windows ของคุณ ให้ฉันแก้ให้ไหม?`,
+      [{ id: 'all', label: `แก้ให้ทั้งหมด (${items.length})`, primary: true }, { id: 'pick', label: 'เลือกทีละข้อ' }, { id: 'no', label: 'ไม่ต้อง ฉันจัดการเอง' }],
+    );
+    if (first === 'no') return this.sayNet('โอเค ฉันไม่แตะอะไรเลย ถ้าเปลี่ยนใจให้เช็กความปลอดภัยอีกรอบได้นะ', 'aside');
+    let chosen = items;
+    if (first === 'pick') {
+      chosen = [];
+      for (const f of items) {
+        const c = await this.askChoice(this.fixExplain(f, f.fixes[0]), [{ id: 'yes', label: 'แก้ข้อนี้', primary: true }, { id: 'skip', label: 'ข้าม' }, { id: 'stop', label: 'พอแล้ว' }]);
+        if (c === 'stop') break;
+        if (c === 'yes') chosen.push(f);
+      }
+      if (!chosen.length) return this.sayNet('ไม่ได้เลือกข้อไหน ฉันเลยไม่แตะอะไรเลย', 'aside');
+    }
+    const plan = chosen.map((f, i) => `${i + 1}. ${f.fixes[0].label}\n   ${f.fixes[0].effect}${f.fixes[0].risk === 'medium' ? `\n   ⚠ ${f.fixes[0].warn}` : ''}`).join('\n');
+    const ok = await this.askChoice(`จะทำตามนี้:\n${plan}\n\nWindows จะถามสิทธิ์ผู้ดูแล (UAC) หนึ่งครั้ง ไม่มีอะไรถูกลบ และย้อนกลับได้ ยืนยันไหม?`, [{ id: 'go', label: 'ยืนยัน แก้เลย', primary: true }, { id: 'cancel', label: 'ยกเลิก' }]);
+    if (ok !== 'go') return this.sayNet('ยกเลิกแล้ว ฉันไม่ได้เปลี่ยนอะไร', 'aside');
+
+    this.panel.setFace('look');
+    this.panel.stream('กำลังแก้… รอหน้าต่างขอสิทธิ์ผู้ดูแลนะ', { done: false });
+    const res = await this.host.fixApply({ fixIds: chosen.map((f) => f.fixes[0].fixId), confirmed: true, note: this.netNote }).catch(() => null);
+    const results = res?.results || [];
+    const good = results.filter((r) => r.ok);
+    const report = results.map((r) => `${r.ok ? '✅' : '❌'} ${r.title || ''}${r.ok ? '' : ` — ${this.fixError(r.error)}`}`).join('\n')
+      || this.fixError(res?.error);
+    let text = good.length
+      ? `แก้แล้ว ${good.length} ข้อ:\n${report}\n\nจดเหตุผลลงล็อกแล้ว ถ้ามีอะไรใช้ไม่ได้ กดย้อนกลับได้เลย`
+      : `ยังไม่ได้แก้อะไร:\n${report}`;
+    this.rememberPrivate({ role: 'assistant', content: text });
+    for (;;) {
+      const c = await this.askChoice(text, [
+        ...(good.length ? [{ id: 'undo', label: 'ย้อนกลับทั้งหมด' }] : []), { id: 'log', label: 'เปิดโฟลเดอร์ล็อก' }, { id: 'ok', label: 'โอเค', primary: true },
+      ], good.length ? 'smug' : 'aside');
+      if (c === 'log') { this.host.fixOpenLog(); continue; }
+      if (c === 'undo') await this.undoEntries(good.map((r) => r.entryId));
+      return;
+    }
+  }
+
+  async undoEntries(ids) {
+    this.panel.setFace('look');
+    this.panel.stream('กำลังย้อนกลับ… รอหน้าต่างขอสิทธิ์ผู้ดูแลนะ', { done: false });
+    const res = await this.host.fixUndo(ids).catch(() => null);
+    const results = res?.results || [];
+    const report = results.map((r) => `${r.ok ? '↩️' : '❌'} ${r.title || ''}${r.ok ? ' — กลับเป็นเหมือนเดิมแล้ว' : ` — ${this.fixError(r.error)}`}`).join('\n') || this.fixError(res?.error);
+    this.sayNet(`${report}${res?.integrity?.valid === false ? '\n\n⚠ ล็อกถูกแก้ไขหรือเสียหาย ฉันตรวจสอบก่อนย้อนแล้วว่าสิ่งที่ย้อนเป็นรายการที่อนุญาตเท่านั้น' : ''}`, results.some((r) => r.ok) ? 'smug' : 'aside');
+  }
+
+  async runFixHistory() {
+    const { items = [], integrity } = (await this.host.fixList().catch(() => null)) || {};
+    if (!items.length) return this.sayNet('ฉันยังไม่เคยแก้อะไรให้เลย ล็อกยังว่างอยู่');
+    const st = { applied: 'แก้แล้ว', undone: 'ย้อนกลับแล้ว', failed: 'ไม่สำเร็จ' };
+    const text = `ประวัติการแก้ล่าสุด:\n${items.slice(0, 5).map((i) => `• ${new Date(i.ts).toLocaleString('th-TH')} — ${i.title} (${st[i.status] || i.status})\n   เหตุผล: ${i.why}`).join('\n')}`
+      + `${integrity?.valid === false ? `\n\n⚠ ล็อกถูกแก้ไขหรือเสียหายที่บรรทัด ${integrity.brokenAt} ระวังนะ` : ''}`;
+    const undoable = items.filter((i) => i.canUndo);
+    for (;;) {
+      const c = await this.askChoice(text, [
+        ...(undoable.length ? [{ id: 'latest', label: 'ย้อนกลับอันล่าสุด' }] : []),
+        ...(undoable.length > 1 ? [{ id: 'all', label: 'ย้อนกลับทั้งหมด' }] : []),
+        { id: 'log', label: 'เปิดโฟลเดอร์ล็อก' }, { id: 'ok', label: 'ปิด', primary: true },
+      ], 'look');
+      if (c === 'log') { this.host.fixOpenLog(); continue; }
+      if (c === 'latest') await this.undoEntries([undoable[0].entryId]);
+      if (c === 'all') await this.undoEntries(undoable.map((i) => i.entryId));
+      return;
+    }
+  }
+
+  // her local model's reading of a scan, as her: a short line, or '' (nothing to say, or it came out wrong)
+  async netAnalysis(text) {
+    const prompt = '(Note for you, never repeat it: the user asked you to scan THEIR OWN PC or home network and this is the real result. '
+      + 'Comment on it as Capri in 2 or 3 short sentences, in the user\'s language, plain text. Say only what the data shows, never invent a port, a device or a threat; '
+      + 'if something looks risky, say calmly what to check; if nothing does, say so.)\n\n' + text;
+    const res = await this.host.netAnalyze({ persona: this.persona(''), text: prompt }).catch(() => null);
+    if (!res?.ok) return '';
+    const out = stopLoop(polish(clean(res.text), '', this.brain.custom?.userName)).trim();
+    return out.length < 4 || out.length > 600 || LEAK.test(out) ? '' : out;
+  }
+
+  // her menu › PC tools
+  async tool(name) {
+    if (!this.open || this.turn) return;
+    if (name === 'status') return this.runStatus('all');
+    if (name === 'top') return this.runStatus('top');
+    if (name === 'ram') return this.offerClearRam('…');
+    if (name === 'cleanup') return this.offerCleanup('…');
+    if (name === 'net' || name.startsWith('net:')) return this.runNet(name);
+    // new net menu shortcuts — fire directly or prompt for an IP first
+    if (name === 'netGateway') return this.runNet('net:gateway');
+    if (name === 'netVuln') return this.runNet('net:vuln:self');
+    if (name === 'fixHistory') return this.runFixHistory();
+    if (name === 'netBandwidth') return this.runNet('net:bandwidth:10');
+    // OS detection and custom port range need an IP: ask in chat first
+    if (name === 'netOs') return this.promptNetIp('os');
+    if (name === 'netPorts') return this.promptNetIp('ports');
+  }
+
+  // ask for an IP then fire the scan (os / ports)
+  promptNetIp(kind) {
+    const isPort = kind === 'ports';
+    const q = isPort
+      ? 'สแกนพอร์ตช่วงไหนของ IP ไหน? เช่น "192.168.1.1 พอร์ต 1-1024"'
+      : 'เดา OS ของ IP ไหนดี? เช่น "192.168.1.5"';
+    this.panel.setFace('smug');
+    this.panel.stream(q, { done: true });
+    this.remember({ role: 'assistant', content: q });
+    // next user message is parsed by the normal netAsk() path in chat.js
+  }
+
+  // her words about a scan result, from the numbers: { line, face }
+  netSummary(res) {
+    if (!res?.ok) {
+      const why = {
+        busy: 'ฉันยังสแกนอีกงานอยู่ รอให้เสร็จก่อนนะ',
+        target: 'ฉันสแกนได้เฉพาะเครื่องคุณเองกับ IP ส่วนตัวในวง LAN (192.168.x.x, 10.x.x.x, 172.16-31.x.x) ส่วนข้างนอกไม่แตะนะ',
+        nolan: 'ไม่เห็นวง LAN เลย ต่อ Wi-Fi หรือสายแลนอยู่รึเปล่า?',
+        nopackets: 'ฟังแล้วไม่ได้แพ็กเก็ตเลย อาจเลือกการ์ดเครือข่ายผิด (ตั้ง netIface ใน config.json) หรือ Npcap ยังไม่ได้ติดตั้ง',
+        nointerface: 'หาการ์ดเครือข่ายสำหรับจับแพ็กเก็ตไม่เจอ ลองติดตั้ง Npcap ใหม่',
+        timeout: 'สแกนนานเกินไป ฉันเลิกรอแล้ว ลองใหม่อีกที',
+      }[res?.error];
+      return { line: why || 'สแกนไม่สำเร็จ choom ลองใหม่หรือเช็คว่าติดตั้งเครื่องมือครบไหม', face: 'aside' };
+    }
+    const n = res.data?.net || {};
+    if (n.kind === 'self') {
+      const risky = (n.risky || []).join(', ');
+      const line = `เครื่องนี้เปิดพอร์ตอยู่ ${n.ports.length} พอร์ต และ ${n.exposed} พอร์ตในนั้นคนในวง LAN เข้าถึงได้`
+        + (risky ? ` ระวัง ${risky} นะ ถ้าไม่ได้ใช้ควรปิด` : ' ไม่เจอตัวเสี่ยง ๆ เลย เก่งมาก') + ' เปิดหน้าต่างรายละเอียดให้แล้ว';
+      return { line, face: risky ? 'wide' : 'smug' };
+    }
+    if (n.kind === 'lan') return { line: `เจอ ${n.hosts.length + 1} เครื่องในวง ${n.range} (รวมเครื่องนี้) ถ้ามีตัวที่ไม่รู้จัก ลองเช็กที่เราเตอร์ดูนะ`, face: n.hosts.length ? 'look' : 'smug' };
+    if (n.kind === 'host') return { line: n.ports.length ? `${n.ip} เปิดอยู่ ${n.ports.length} พอร์ต ดูรายละเอียดในหน้าต่างได้เลย` : `${n.ip} ไม่เห็นพอร์ตเปิดเลยสักพอร์ต`, face: 'smug' };
+    if (n.kind === 'capture') {
+      const top = n.domains[0]?.name;
+      const suspicious = (n.suspicious || []).length;
+      const line = `ฟังมา ${n.seconds} วิ ได้ ${n.packets} แพ็กเก็ต${top ? ` คุยกับ ${top} บ่อยสุด` : ''}`
+        + (n.cleartext.length ? ` แต่เจอ ${n.cleartext.join(', ')} ที่ไม่เข้ารหัสด้วยนะ` : '')
+        + (suspicious ? ` และมีโดเมนน่าสงสัย ${suspicious} ตัว ดูรายละเอียดด้านล่างได้เลย` : (!n.cleartext.length ? ' ไม่เจออะไรแปลก ๆ' : ''));
+      return { line, face: (n.cleartext.length || suspicious) ? 'wide' : 'smug' };
+    }
+    if (n.kind === 'bandwidth') {
+      const fmtBps = (bytesPerSec) => {
+        const bps = bytesPerSec * 8;
+        if (bps >= 1e9) return `${(bps / 1e9).toFixed(1)} Gbps`;
+        if (bps >= 1e6) return `${(bps / 1e6).toFixed(1)} Mbps`;
+        return `${Math.round(bps / 1e3)} Kbps`;
+      };
+      return { line: `วัดมา ${n.seconds} วิ — ↑ ส่ง ${fmtBps(n.avgOut)} / ↓ รับ ${fmtBps(n.avgIn)} (เฉลี่ย) ดูรายละเอียดด้านล่างได้นะ`, face: 'smug' };
+    }
+    if (n.kind === 'gateway') {
+      const count = (n.ports || []).length;
+      return {
+        line: count ? `เราเตอร์ที่ ${n.ip} เปิด ${count} พอร์ต — ดูรายละเอียดด้านล่างได้เลย${(n.ports || []).some((p) => p.port === 80) ? ' ระวัง admin panel บน HTTP ไม่เข้ารหัสนะ' : ''}` : `ไม่เห็นพอร์ตเปิดที่ ${n.ip} เลย เราเตอร์ซ่อนตัวเก่งหรือ IP ผิด`,
+        face: (n.ports || []).some((p) => p.risky) ? 'wide' : 'smug',
+      };
+    }
+    if (n.kind === 'os') {
+      return { line: n.os ? `${n.ip} น่าจะรัน ${n.os} อยู่ ดูพอร์ตเพิ่มเติมด้านล่างได้นะ` : `ระบุ OS ของ ${n.ip} ไม่ได้ ลองรันในฐานะ Admin เพื่อผลที่ดีขึ้น`, face: 'smug' };
+    }
+    if (n.kind === 'vuln') {
+      const real = (n.findings || []).filter((x) => x.severity !== 'info');
+      const where = n.local ? 'เครื่องนี้' : n.ip;
+      if (!real.length) return { line: `${where} ผ่านการเช็กเบื้องต้น ไม่เจอปัญหาที่ชัดเจน (แต่ไม่ใช่ pentest จริงนะ)`, face: 'smug' };
+      const sev = { high: 'สูง', medium: 'กลาง', low: 'ต่ำ' };
+      const brief = real.slice(0, 4).map((x) => `• [${sev[x.severity] || x.severity}] ${x.title}\n   กำลังทำ: ${x.doing?.[0] || '-'}\n   ใครใช้อยู่: ${x.usedBy?.text || '-'}`).join('\n');
+      return {
+        line: `เจอ ${real.length} ข้อที่ควรระวังใน${where}:\n${brief}${real.length > 4 ? `\n…และอีก ${real.length - 4} ข้อ` : ''}\n\nรายละเอียดเต็ม (ทำไมเสี่ยง / แก้ยังไง) อยู่ในหน้าต่างที่เปิดให้แล้ว`,
+        face: 'wide',
+      };
+    }
+    if (n.kind === 'ports') {
+      return { line: n.ports.length ? `${n.ip} เปิดอยู่ ${n.ports.length} พอร์ตในช่วง ${n.range} ดูรายละเอียดด้านล่างได้` : `ไม่พบพอร์ตเปิดในช่วง ${n.range} ที่ ${n.ip}`, face: 'smug' };
+    }
+    return { line: 'เสร็จแล้ว choom', face: 'smug' };
+  }
+
   // เช็คสถานะเครื่อง + เปิดเทอร์มินัล (OS / BRAIN / RAM / CPU / …)
   async runStatus(what = 'all') {
     this.zap();
@@ -1327,7 +1705,7 @@ export class Chat {
       const soon = this.reminders.upcoming.slice(0, 6);
       if (soon.length) lines.push(`Reminders you're keeping for them: ${soon.map((r) => `${clock(r.at, this.brain.lang)}${r.text ? ` (${r.text})` : ''}`).join('; ')}.`);
     }
-    lines.push('Your system also searches the user\'s files when they ask you to find one, searches the web when they ask, takes screenshots, starts Roblox games by name, and reports PC status (RAM, CPU, GPU, disk, top processes, temperature, uptime) when they ask to check the machine: what it did shows under your answer, so never make up numbers or results.');
+    lines.push('Your system also searches the user\'s files when they ask you to find one, searches the web when they ask, takes screenshots, starts Roblox games by name, and scans the user\'s own PC ports and local network (Nmap) and glances at its traffic (Wireshark), reports PC status (RAM, CPU, GPU, disk, top processes, temperature, uptime) when they ask to check the machine: what it did shows under your answer, so never make up numbers or results.');
     lines.push('Apart from that, you can\'t see the user\'s screen unless they ask you to look, can\'t change Windows settings, can\'t check live weather unless your system shows real weather data in a note (when asked, it does look it up), can\'t browse the web for them without the search tag flow, and can\'t touch random files: if asked something you can\'t do, say so in character (short, teasing, honest) — never pretend you already did it. Never say you opened the Recycle Bin (ถังขยะ), cleaned the disk, or cleared RAM unless you ended with the matching tag. Greetings, laughs (555), and short yes/no: reply short in character only, no PC actions.');
     return lines;
   }
@@ -1394,7 +1772,7 @@ export class Chat {
   // messages go first), so what was said is put right by the question, which always arrives
   recallNote(text) {
     if (!recallIntent(text) && !RECALL.test(text)) return '';
-    return transcriptNote(this.history, this.summary);
+    return transcriptNote(this.visible(this.history), this.safeSummary());
   }
 
   // what she said last time (so she doesn't open the same way twice)
@@ -1483,6 +1861,9 @@ export class Chat {
     ].join('\n');
   }
 }
+
+// private IPs, MACs, a scan block: what a summary must never carry to a model that is not on this PC (same idea as privacy.js)
+const SCAN_TRACE = /\b(?:NMAP|TSHARK)\s+[A-Z]+\b|\b(?:10|127|192\.168|172\.(?:1[6-9]|2\d|3[01])|169\.254)\.\d{1,3}\.\d{1,3}(?:\.\d{1,3})?\b|\b[0-9a-f]{2}(?:[:-][0-9a-f]{2}){5}\b|ช่องโหว่|Capri block/i;
 
 const keyOf = (m) => `${m?.role}|${m?.content}`; // a message's identity across reloads of the saved history
 

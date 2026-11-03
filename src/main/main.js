@@ -22,6 +22,9 @@ const apps = require('./apps');
 const vitals = require('./vitals');
 const launch = require('./launch');
 const files = require('./files');
+const netscan = require('./netscan');
+const privacy = require('./privacy');       // who may read what about this PC (scan results, ports, IPs)
+const remediate = require('./remediate');   // the only code that changes the PC for security, and its fix log
 const { ASSISTANTS, assistant } = require('./assistants');
 const activeAssistant = () => assistant(config.load().assistant); // Claude Code or Codex
 const activeHooks = () => activeAssistant().hooks;
@@ -419,6 +422,17 @@ async function tellNews({ force = false } = {}) {
   }
 }
 
+// is her model running on this PC (so a scan result may be read by it)? A key, an online model or Claude Code: no
+function netModelLocal() {
+  try {
+    const cfg = config.load();
+    // could a model on THIS PC read it (the switch itself is the menu checkbox, so it is ignored here)
+    return privacy.canShare(cfg, pickModel(cfg), { llm, ollama, ignoreSwitch: true }).ok;
+  } catch {
+    return false;
+  }
+}
+
 function rebuildTray() {
   if (!tray) return;
   const cfg = config.load();
@@ -453,6 +467,42 @@ function rebuildTray() {
     ...(cfg.claude ? [{ label: t.report, click: () => sendCommand('report') }] : []),
     { label: t.talk, click: () => sendCommand('chat') },
     { label: t.lookNow, click: () => sendCommand('look') },
+    {
+      label: tt('pcTools'),
+      submenu: [
+        { label: tt('toolStatus'), click: () => sendCommand('pcTool', { tool: 'status' }) },
+        { label: tt('toolTop'), click: () => sendCommand('pcTool', { tool: 'top' }) },
+        { label: tt('toolRam'), click: () => sendCommand('pcTool', { tool: 'ram' }) },
+        { label: tt('toolCleanup'), click: () => sendCommand('pcTool', { tool: 'cleanup' }) },
+        { type: 'separator' },
+        {
+          label: tt('netMenu'),
+          submenu: [
+            { label: tt('netSelf'), click: () => sendCommand('pcTool', { tool: 'net' }) },
+            { label: tt('netLan'), click: () => sendCommand('pcTool', { tool: 'net:lan' }) },
+            { label: tt('netCapture'), click: () => sendCommand('pcTool', { tool: 'net:capture:15' }) },
+            { type: 'separator' },
+            { label: tt('netGateway'), click: () => sendCommand('pcTool', { tool: 'netGateway' }) },
+            { label: tt('netVuln'), click: () => sendCommand('pcTool', { tool: 'netVuln' }) },
+            { label: tt('netBandwidth'), click: () => sendCommand('pcTool', { tool: 'netBandwidth' }) },
+            { label: tt('netOs'), click: () => sendCommand('pcTool', { tool: 'netOs' }) },
+            { label: tt('netPorts'), click: () => sendCommand('pcTool', { tool: 'netPorts' }) },
+            { type: 'separator' },
+            { label: tt('netFixes'), click: () => sendCommand('pcTool', { tool: 'fixHistory' }) },
+            {
+              // her reasons may use CISA's public list (downloaded, matched here); nothing about this PC is ever sent
+              label: tt('netIntel'), type: 'checkbox', checked: cfg.intelOnline !== false,
+              click: (item) => updateConfig({ intelOnline: item.checked }),
+            },
+            {
+              // only a model on this PC reads the results; with a key or an online model this changes nothing: they are never sent
+              label: netModelLocal() ? tt('netAI') : tt('netAIOnline'), type: 'checkbox', checked: cfg.netAI !== false, enabled: netModelLocal(),
+              click: (item) => updateConfig({ netAI: item.checked }),
+            },
+          ],
+        },
+      ],
+    },
     {
       label: t.reminders,
       submenu: reminders.length
@@ -855,7 +905,8 @@ async function chatWithFallback(cfg, messages, send, signal, streamed) {
   let busy = 0;
   for (;;) {
     try {
-      const text = await llm.chat(cfg.provider, llmConfig(cfg), { model, messages }, send, signal);
+      const share = privacy.canShare(cfg, model, { llm, ollama }).ok; // checked again for EACH model tried: a fallback may land on a cloud one
+      const text = await llm.chat(cfg.provider, llmConfig(cfg), { model, messages: privacy.scrub(messages, share) }, send, signal);
       if (model !== pickModel(cfg)) updateConfig({ chatModel: model });
       return text;
     } catch (err) {
@@ -903,7 +954,8 @@ async function sayAboutSnap({ id, persona, prompt, history = [] }) {
     ? { role: 'user', content: prompt, images: [image] }
     : { role: 'user', content: [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${image}` } }] };
   // asked in her chat: the conversation so far comes before it (text only)
-  const before = (Array.isArray(history) ? history : []).filter((m) => typeof m?.content === 'string' && ['user', 'assistant'].includes(m.role));
+  const shareHistory = privacy.canShare(cfg, model, { llm, ollama }).ok;
+  const before = privacy.scrub(Array.isArray(history) ? history : [], shareHistory).filter((m) => typeof m?.content === 'string' && ['user', 'assistant'].includes(m.role));
   const messages = [{ role: 'system', content: persona }, ...before, user];
   for (let attempt = 0; ; attempt++) {
     try {
@@ -1212,11 +1264,55 @@ function registerIpc() {
   ipcMain.handle('pc:status', async (_event, what) => {
     return launch.pcStatus(what || 'all');
   });
+  // Nmap and Wireshark (netscan.js): her own PC and your own network only; the checks are in netscan.js, not here
+  ipcMain.handle('net:tools', () => {
+    const { nmap, tshark } = netscan.tools();
+    return { nmap: Boolean(nmap), tshark: Boolean(tshark), range: netscan.lanInterfaces()[0]?.cidr || null };
+  });
+  ipcMain.handle('net:scan', (_e, { kind, target } = {}) => netscan.scan(String(kind || 'self'), String(target || '')));
+  ipcMain.handle('net:capture', (_e, seconds) => netscan.capture(Number(seconds) || 15, { iface: config.load().netIface }));
+  ipcMain.on('net:cancel', () => netscan.cancel());
+  // Her model reads a scan result: ONLY a model running on this PC. A key, an online provider, an Ollama cloud model or
+  // Claude Code: nothing is sent, whatever the overlay asks (the check is here, not in the overlay).
+  ipcMain.handle('net:analyze', async (_e, { persona, text } = {}) => {
+    const cfg = config.load();
+    if (cfg.netAI === false) return { ok: false, code: 'off' };
+    let model = pickModel(cfg);
+    if (!model && cfg.provider === 'ollama') { await refreshModels(); model = pickModel(cfg); } // Ollama is on this PC: no one else is asked
+    // privacy.js: a model on this PC through a loopback address, or nothing. Key, online, cloud, remote host, Claude Code: refused.
+    const gate = privacy.canShare(cfg, model, { llm, ollama });
+    if (!gate.ok) return { ok: false, code: 'online' };
+    const prompt = String(text || '').slice(0, 3500);
+    const messages = [{ role: 'system', content: String(persona || '') }, { role: 'user', content: prompt }];
+    try {
+      const answer = await llm.chat(cfg.provider, llmConfig(cfg), { model, messages }, () => {}, AbortSignal.timeout(90000));
+      return { ok: true, text: answer, model };
+    } catch (err) {
+      return { ok: false, code: err.code || null, error: err.message };
+    }
+  });
+  // does her model run on this PC (so that scan results may be shown to it)? { ok, why } — the overlay only uses it for its own notes,
+  // the real checks are made here, for every request
+  ipcMain.handle('privacy:modelShare', () => {
+    const cfg = config.load();
+    return privacy.canShare(cfg, pickModel(cfg), { llm, ollama });
+  });
+  // her fixes (remediate.js): the overlay only sends opaque ids from a scan she just made; what runs, and the log, are decided there
+  ipcMain.handle('fix:apply', (_e, req) => remediate.apply({ fixIds: req?.fixIds, confirmed: req?.confirmed === true, note: req?.note }));
+  ipcMain.handle('fix:list', () => ({ items: remediate.list(10), integrity: remediate.verify() }));
+  ipcMain.handle('fix:undo', (_e, entryIds) => remediate.undo({ entryIds }));
+  ipcMain.handle('fix:verify', () => remediate.verify());
+  ipcMain.handle('fix:openLog', () => { shell.showItemInFolder(remediate.logPath()); return true; });
   // Status terminal window — reuse if already open so the next scan updates instead of vanishing
   let statusWin = null;
   let statusCloseTimer = null;
+  let statusView = '';
+  // The network / security scan is long and meant to be read (and scrolled): it stays until you close it.
+  // The other cards still close on their own after 90 s.
   const armStatusClose = () => {
     if (statusCloseTimer) clearTimeout(statusCloseTimer);
+    statusCloseTimer = null;
+    if (statusView === 'net') return;
     statusCloseTimer = setTimeout(() => {
       statusCloseTimer = null;
       if (statusWin && !statusWin.isDestroyed()) statusWin.close();
@@ -1225,13 +1321,14 @@ function registerIpc() {
   ipcMain.handle('pc:statusCard', async (_event, payload) => {
     try {
       if (!payload?.text && !payload?.data) return { ok: false, error: 'no data' };
+      statusView = payload?.view || '';
       const html = launch.statusDashboardHtml(payload);
       const dir = path.join(app.getPath('userData'), 'status');
       fs.mkdirSync(dir, { recursive: true });
       // unique file each time so loadFile/reload is not served from cache
       const file = path.join(dir, `dashboard-${Date.now()}.html`);
       fs.writeFileSync(file, html, 'utf8');
-      const title = payload?.view === 'process' ? 'CAPRI.NET — process' : 'CAPRI.NET — system';
+      const title = { process: 'CAPRI.NET — process', net: 'CAPRI.NET — network' }[payload?.view] || 'CAPRI.NET — system';
 
       if (statusWin && !statusWin.isDestroyed()) {
         // reuse: reload content + retitle + keep window visible
@@ -1245,9 +1342,9 @@ function registerIpc() {
 
       const b = overlay?.getBounds();
       statusWin = new BrowserWindow({
-        width: 620,
-        height: 440,
-        x: b ? Math.round(b.x + b.width * 0.5 - 310) : undefined,
+        width: statusView === 'net' ? 900 : 620,
+        height: statusView === 'net' ? 640 : 440,
+        x: b ? Math.round(b.x + b.width * 0.5 - (statusView === 'net' ? 450 : 310)) : undefined,
         y: b ? Math.round(b.y + b.height * 0.32) : undefined,
         show: false,
         frame: true,
@@ -1285,6 +1382,7 @@ function registerIpc() {
   });
   // she checked your PC and now closes her own status window (mischief.js)
   ipcMain.handle('pc:statusClose', () => {
+    if (statusView === 'net') return true; // the scan stays open for you to read
     if (statusWin && !statusWin.isDestroyed()) statusWin.close();
     return true;
   });

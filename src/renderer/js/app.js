@@ -775,7 +775,7 @@ async function boot() {
   // She gets bored when the PC is left alone (mischief.js, her menu › Mischief)
   // her hack demo (hacksim.js): a fake login page and a make-believe attack on it, from her chat or her Mischief menu
   hack = new HackSim({ capri, fx, panel, voice, brain, tts, chat });
-  chat.onHack = () => hack.run({});
+  chat.onHack = (opts = {}) => hack.run(opts);
   const mischief = new Mischief({ capri, fx, panel, voice, tts, extras, host, brain, chat, guide, screens: () => screens, goToScreen });
   mischief.configure(config);
   mischief.hack = hack;
@@ -946,6 +946,10 @@ async function boot() {
         if (capri.stowed || capri.dormant || chat.open || guide.running || panel.visible) break; // not over something else
         capri.perform('hop');
         panel.say({ kind: 'info', face: 'look', line: cmd.line, hold: 7000 });
+        break;
+      case 'pcTool': // her menu › PC tools: check the PC, clear RAM, clean junk, Nmap / Wireshark (chat.js tool())
+        if (!chat.open) await chat.start();
+        if (chat.open) await chat.tool(String(cmd.tool || ''));
         break;
       case 'hacksim': // her menu › Mischief › hack demo
         hack.run({});

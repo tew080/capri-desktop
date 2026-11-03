@@ -174,7 +174,7 @@ export class HackSim {
     if (!quiet && this.tts?.mode !== 'off') this.tts?.say?.(line); // her thinking aloud isn't spoken every time
   }
 
-  build(t, target) {
+  build(t, target, label = '') {
     // The page's CSP most likely refuses a <style> element (that's why the card showed up as bare, see-through HTML):
     // a constructed stylesheet isn't subject to it. The <style> element stays as the fallback.
     if (!HackSim.sheet) {
@@ -214,6 +214,11 @@ export class HackSim {
         <button type="button" data-a="hint"></button><button type="button" data-a="def"></button><button type="button" data-a="stop"></button>
       </div>`;
     el.querySelector('.capri-hs__sim').textContent = t.sim;
+    // a device from her LAN scan lends its name to the prop page (set as text, never as HTML): it is still her fake page
+    if (label) {
+      el.querySelector('.capri-hs__title').textContent = `DEMO · ${label}`;
+      el.querySelector('.capri-hs__url').textContent = 'https://demo.acme-test.invalid/login';
+    }
     el.querySelector('[data-a="stop"]').textContent = t.stop;
     document.body.append(el);
     this.el = el;
@@ -223,7 +228,7 @@ export class HackSim {
   }
 
   // The show. `shouldStop`: true when it has to end (mischief: you came back). `auto`: she's alone (no buttons to press).
-  async run({ shouldStop = () => false, auto = false } = {}) {
+  async run({ shouldStop = () => false, auto = false, label = '' } = {}) {
     const { capri, fx } = this;
     const t = this.t;
     if (this.running) {
@@ -235,7 +240,7 @@ export class HackSim {
     const target = pick(TARGETS);
     const dict = shuffle(COMMON.filter((w) => w !== target));
     dict.splice(24 + Math.floor(Math.random() * 14), 0, target); // somewhere in the middle: long enough to watch
-    const el = this.build(t, target);
+    const el = this.build(t, target, String(label || '').slice(0, 60));
     this.el = el;
     const $ = (k) => el.querySelector(`[data-f="${k}"]`);
     const btn = (k) => el.querySelector(`[data-a="${k}"]`);

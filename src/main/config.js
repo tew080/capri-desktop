@@ -48,7 +48,11 @@ const DEFAULTS = {
   jealousLevel: 2,   // how clingy she is about other AIs: 1 light, 2 normal, 3 heavy (jealous: false is "off")
   chatEvery: 0,      // minutes between her invitations to talk when you've been quiet; 0: never
   danceMusic: true,  // she dances while music plays
+  netAsked: false,   // she told you what scanning your PC and network means (Nmap, Wireshark) and you said yes (netscan.js)
+  netAI: true,       // with a LOCAL model, she may have it read her scan results (netscan.js); a key or an online model: never sent, whatever this says
+  netIface: null,    // the network adapter her Wireshark capture listens on (null: the first real one, Wi-Fi or Ethernet)
   lookAsked: false,  // she told you what looking means (where the picture goes) and you said yes
+  intelOnline: true, // her reasons may use CISA's public vulnerability list (downloaded and matched here; nothing about this PC is sent)
 };
 
 let cache = null;

@@ -58,6 +58,11 @@ const TRAY = {
     vDiskIo: 'Disk read / write', vDisk: 'System drive used', vUptime: 'Uptime', vBat: 'Battery', vNet: 'Network',
     chatEveryMenu: 'How often she invites me to talk', chatNever: 'Never', chatRare: 'Rarely (~60 min)', chatNormal: 'Normal (~30 min)', chatOften: 'Often (~15 min)', chatClingy: 'Clingy (~5 min)',
     danceMenu: 'Dance to music', hackDemo: 'Hack demo (fake login page)',
+    pcTools: 'PC tools', toolStatus: 'Check my PC', toolTop: 'What is using my PC', toolRam: 'Clear RAM', toolCleanup: 'Clean junk files',
+    netMenu: 'Network (Nmap / Wireshark)', netSelf: 'Scan this PC\'s open ports', netLan: 'Who is on my network', netCapture: 'Listen to my traffic (15 s)',
+    netGateway: 'Scan my router', netVuln: 'Security check this PC', netBandwidth: 'Measure my connection speed', netOs: 'Detect OS of a device…', netPorts: 'Scan a port range…',
+    netAI: 'Let my local model read the results', netAIOnline: 'Results are never sent to an online model or key',
+    netFixes: 'Fix history / undo', netIntel: 'Check public vulnerability lists (CISA) — nothing of mine is sent',
   },
   es: {
     name: 'Español',
@@ -163,6 +168,11 @@ const TRAY = {
     vDiskIo: 'ดิสก์ อ่าน/เขียน', vDisk: 'ดิสก์ที่ใช้ไป (ไดรฟ์ระบบ)', vUptime: 'เปิดเครื่องมานาน', vBat: 'แบตเตอรี่', vNet: 'สถานะเน็ต',
     chatEveryMenu: 'ความถี่ที่เธอชวนคุย', chatNever: 'ไม่ชวนเลย', chatRare: 'นาน ๆ ที (ทุก ~60 นาที)', chatNormal: 'ปกติ (ทุก ~30 นาที)', chatOften: 'บ่อย (ทุก ~15 นาที)', chatClingy: 'ขี้อ้อน (ทุก ~5 นาที)',
     danceMenu: 'เต้นตามเพลง', hackDemo: 'โชว์แฮก (เว็บล็อกอินปลอม)',
+    pcTools: 'เครื่องมือ PC', toolStatus: 'เช็คเครื่อง', toolTop: 'ดูตัวที่กินเครื่อง', toolRam: 'เคลียร์แรม', toolCleanup: 'ล้างไฟล์ขยะ',
+    netMenu: 'เครือข่าย (Nmap / Wireshark)', netSelf: 'สแกนพอร์ตเปิดในเครื่องนี้', netLan: 'ใครอยู่ในวงเครือข่าย', netCapture: 'ฟังทราฟฟิกของเครื่อง (15 วิ)',
+    netGateway: 'สแกนเราเตอร์', netVuln: 'เช็คความปลอดภัยเครื่องนี้', netBandwidth: 'วัดความเร็วเน็ต', netOs: 'เดา OS ของอุปกรณ์…', netPorts: 'สแกนช่วงพอร์ตที่ต้องการ…',
+    netAI: 'ให้โมเดลในเครื่องช่วยอ่านผล', netAIOnline: 'โมเดลออนไลน์/API key: ไม่ส่งผลสแกนเด็ดขาด',
+    netFixes: 'ประวัติการแก้ไข / ย้อนกลับ', netIntel: 'เทียบกับรายการช่องโหว่สาธารณะ (CISA) — ไม่ส่งข้อมูลเครื่องออกไป',
   },
 };
 

@@ -674,8 +674,49 @@ async function weather(place = '') {
   }
 }
 
+async function netStatus(what) {
+  const net = require('./netscan');
+  const cfg = require('./config').load();
+  // format: 'net:kind[:arg[:extra]]'
+  const parts = what.split(':');
+  const kind = parts[1] || 'self';
+  const arg  = parts[2] || '';
+  const extra = parts[3] || '';
+
+  if (kind === 'capture' || kind === 'tshark')
+    return net.capture(Number(arg) || 15, { iface: cfg.netIface });
+  if (kind === 'bandwidth')
+    return net.measureBandwidth(Number(arg) || 10, { iface: cfg.netIface });
+  if (kind === 'gateway')
+    return net.scan('gateway');
+  if (kind === 'vuln') {
+    const target = (arg === 'self' || !arg) ? '127.0.0.1' : arg;
+    return net.scan('vuln', target);
+  }
+  if (kind === 'os')
+    return net.scan('os', arg);
+  if (kind === 'ports')
+    return net.scan('ports', arg, extra);
+  if (kind === 'host')
+    return net.scan('host', arg);
+  if (kind === 'lan')
+    return net.scan('lan');
+  return net.scan('self');
+}
+
 /** @param {string} what  ram|cpu|gpu|disk|storage|top|service|temp|uptime|os|weather[:place]|all */
 async function pcStatus(what = 'all') {
+  // Nmap / Wireshark (netscan.js):
+  //   'net'                         → scan self (open ports on this PC)
+  //   'net:lan'                     → ping scan of your /24
+  //   'net:host:192.168.1.20'       → open ports on one LAN device
+  //   'net:gateway'                 → router admin panels / services
+  //   'net:os:192.168.1.20'         → OS detection on a LAN device
+  //   'net:vuln[:ip|self]'          → NSE script security check
+  //   'net:ports:ip:range'          → custom port range scan (e.g. 'net:ports:192.168.1.1:1-1024')
+  //   'net:capture[:seconds]'       → tshark traffic snapshot
+  //   'net:bandwidth[:seconds]'     → tshark in/out throughput measurement
+  if (/^net(:|$)/i.test(String(what))) return netStatus(String(what));
   if (/^weather(:|$)/i.test(String(what))) return weather(String(what).slice(8));
   const w = String(what || 'all').toLowerCase();
   try {
@@ -714,15 +755,15 @@ async function pcStatus(what = 'all') {
 
 function statusDashboardHtml(payload = {}) {
   // Capri anime terminal — offline-safe (no external fonts/CDN)
-  const view = payload.view === 'process' ? 'process' : 'system';
-  const cmd = view === 'process' ? 'capri top' : 'capri status';
-  const title = view === 'process' ? 'CAPRI.NET — PROCESS' : 'CAPRI.NET — SYSTEM';
-  const jp = view === 'process' ? 'プロセス監視' : 'システム監視';
+  const view = ['process', 'net'].includes(payload.view) ? payload.view : 'system';
+  const cmd = { process: 'capri top', net: 'capri net' }[view] || 'capri status';
+  const title = { process: 'CAPRI.NET — PROCESS', net: 'CAPRI.NET — NETWORK' }[view] || 'CAPRI.NET — SYSTEM';
+  const jp = { process: 'プロセス監視', net: 'ネットワーク監視' }[view] || 'システム監視';
   const brain = payload.brain || null; // { model, provider }
   const raw = String(payload.text || '').replace(/\r\n/g, '\n').trim();
   let lines = raw.split('\n').filter((l) => {
     if (l.trim() === '$') return false;
-    if (/^\$ (process|system) scan$/.test(l.trim())) return false;
+    if (/^\$ (process|system|net) scan$/.test(l.trim())) return false;
     return true;
   });
   // inject BRAIN block at top if provided and not already present
@@ -755,10 +796,12 @@ function statusDashboardHtml(payload = {}) {
     background: var(--void);
     color: var(--fg);
     font: 13px/1.5 Consolas, "Cascadia Mono", "Courier New", monospace;
-    overflow: auto;
+    overflow: auto; /* both ways: long lines scroll sideways */
   }
   .stage {
     min-height: 100%;
+    width: max-content; /* grows with the longest line, so the page scrolls horizontally */
+    min-width: 100%;
     padding: 14px;
     background:
       radial-gradient(ellipse 80% 50% at 100% 0%, rgba(255,45,149,0.22), transparent 55%),
@@ -847,7 +890,7 @@ function statusDashboardHtml(payload = {}) {
 <script>
 const DATA = ${payloadJson};
 document.getElementById('jpLabel').textContent = DATA.jp || '';
-document.getElementById('badge').textContent = DATA.view === 'process' ? 'PROCESS' : 'SYSTEM';
+document.getElementById('badge').textContent = String(DATA.view || 'system').toUpperCase();
 const cmdEl = document.getElementById('cmd');
 const cmdCursor = document.getElementById('cmdCursor');
 const outEl = document.getElementById('out');
@@ -855,7 +898,7 @@ const doneEl = document.getElementById('done');
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 function colorizeLine(l) {
   const e = l.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-  if (/^(RAM|CPU|GPU|DISK|TOP RAM|TOP CPU|UPTIME|OS|BRAIN)\\b/.test(l)) return '<div class="sec">' + e + '</div>';
+  if (/^(RAM|CPU|GPU|DISK|TOP RAM|TOP CPU|UPTIME|OS|BRAIN|NMAP (?:SELF|LAN|HOST|GATEWAY|OS|VULN|PORTS)|TSHARK(?: [A-Z]+)?|PORTS|FINDINGS|SOURCE|EXPOSED|DEVICES|PROTO|DOMAINS|TALKERS|NOTES)\\b/.test(l)) return '<div class="sec">' + e + '</div>';
   if (/^\\s+\\d+\\./.test(l) || /\\[#|\\[-/.test(l) || /\\]\\s*\\d+%/.test(l)) {
     const colored = e.replace(/(#+)/g,'<span class="bar">$1</span>').replace(/(-{2,})/g,'<span class="dim">$1</span>').replace(/(\\d+(?:\\.\\d+)?\\s*(?:MB|GB|s|%))/g,'<span class="num">$1</span>');
     return '<div class="line">' + colored + '</div>';
@@ -880,7 +923,7 @@ async function run() {
     const lines = DATA.lines || [];
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
-      const isSec = /^(RAM|CPU|GPU|DISK|TOP RAM|TOP CPU|UPTIME|OS|BRAIN)\\b/.test(line);
+      const isSec = /^(RAM|CPU|GPU|DISK|TOP RAM|TOP CPU|UPTIME|OS|BRAIN|NMAP (?:SELF|LAN|HOST|GATEWAY|OS|VULN|PORTS)|TSHARK(?: [A-Z]+)?|PORTS|FINDINGS|SOURCE|EXPOSED|DEVICES|PROTO|DOMAINS|TALKERS|NOTES)\\b/.test(line);
       if (isSec && i > 0) await sleep(90);
       const wrap = document.createElement('div');
       wrap.className = 'line';
