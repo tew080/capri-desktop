@@ -46,6 +46,7 @@ contextBridge.exposeInMainWorld('host', {
   cpu: () => ipcRenderer.invoke('pc:cpu'),
   idle: () => ipcRenderer.invoke('pc:idle'),
   pcStatus: (what) => ipcRenderer.invoke('pc:status', what),
+  vitals: (keys) => ipcRenderer.invoke('vitals:read', keys),
   showStatusCard: (payload) => ipcRenderer.invoke('pc:statusCard', payload),
   closeStatusCard: () => ipcRenderer.invoke('pc:statusClose'),
   openOllama: () => ipcRenderer.send('chat:ollama'),

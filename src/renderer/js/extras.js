@@ -370,26 +370,40 @@ function classifyWindow(win) {
   return 'other';
 }
 
-/** One-line vitals: CPU · BAT · NET */
-async function fetchStatusLine({ host, launch, lang = 'en' }) {
-  const statusFn = launch?.pcStatus || host?.pcStatus || ((w) => host?.invoke?.('pcStatus', w));
-  let cpu = '—', bat = '—', net = (typeof navigator !== 'undefined' && navigator.onLine === false) ? 'OFF' : 'OK';
-  try {
-    if (typeof statusFn === 'function') {
-      const c = await statusFn('cpu').catch(() => null);
-      const load = Number(c?.data?.cpu?.load ?? c?.cpu?.load ?? NaN);
-      if (Number.isFinite(load)) cpu = `${Math.round(load)}%`;
-    }
-  } catch { /* */ }
-  try {
-    if (typeof navigator !== 'undefined' && navigator.getBattery) {
-      const b = await navigator.getBattery();
-      const pct = Math.round((b.level || 0) * 100);
-      bat = b.charging ? `${pct}%⚡` : `${pct}%`;
-    }
-  } catch { /* */ }
-  if (lang === 'th') return `CPU ${cpu} · แบต ${bat} · NET ${net}`;
-  return `CPU ${cpu} · BAT ${bat} · NET ${net}`;
+/** One-line vitals: what you picked in her menu (default CPU · BAT · NET) */
+const VITAL_LABELS = {
+  cpu: ['CPU', 'CPU'], ram: ['RAM', 'RAM'], gpu0: ['GPU0', 'GPU0'], gpu1: ['GPU1', 'GPU1'], vram0: ['VRAM0', 'VRAM0'], vram1: ['VRAM1', 'VRAM1'],
+  diskio: ['ดิสก์', 'DISK'], disk: ['ไดรฟ์', 'DRIVE'], uptime: ['เปิดมา', 'UP'], bat: ['แบต', 'BAT'], net: ['NET', 'NET'],
+};
+async function fetchStatusLine({ host, launch, lang = 'en', keys } = {}) {
+  const want = Array.isArray(keys) && keys.length ? keys : ['cpu', 'bat', 'net'];
+  const vals = {};
+  // the numbers main.js can read (CPU, RAM, GPU, VRAM, disk...); an older main.js without it falls back to pcStatus for the CPU
+  const fromMain = want.filter((k) => !['bat', 'net'].includes(k));
+  if (fromMain.length) {
+    try {
+      if (typeof host?.vitals === 'function') Object.assign(vals, await host.vitals(fromMain));
+      else if (fromMain.includes('cpu')) {
+        const statusFn = launch?.pcStatus || host?.pcStatus || ((w) => host?.invoke?.('pcStatus', w));
+        const c = await statusFn('cpu').catch(() => null);
+        const load = Number(c?.data?.cpu?.load ?? c?.cpu?.load ?? NaN);
+        if (Number.isFinite(load)) vals.cpu = `${Math.round(load)}%`;
+      }
+    } catch { /* */ }
+  }
+  if (want.includes('net')) vals.net = (typeof navigator !== 'undefined' && navigator.onLine === false) ? 'OFF' : 'OK';
+  if (want.includes('bat')) {
+    try {
+      if (typeof navigator !== 'undefined' && navigator.getBattery) {
+        const b = await navigator.getBattery();
+        const pct = Math.round((b.level || 0) * 100);
+        vals.bat = b.charging ? `${pct}%⚡` : `${pct}%`;
+      }
+    } catch { /* */ }
+  }
+  const i = lang === 'th' ? 0 : 1;
+  const parts = want.filter((k) => VITAL_LABELS[k]).map((k) => `${VITAL_LABELS[k][i]} ${vals[k] ?? '—'}`);
+  return parts.join(' · ') || (lang === 'th' ? 'ยังไม่ได้เลือกข้อมูลที่จะโชว์' : 'No readings picked');
 }
 
 /**
@@ -398,7 +412,7 @@ async function fetchStatusLine({ host, launch, lang = 'en' }) {
  */
 export function installExtras(ctx) {
   const {
-    capri, panel, brain, fx, host, launch, pc, voice, bond, jealousy, chat, guide,
+    capri, panel, brain, fx, host, launch, pc, voice, bond, jealousy, chat, guide, getVitals, getDance,
     getMouse = () => null,
   } = ctx;
   const reactCtx = { panel, brain, voice: voice || null };
@@ -767,8 +781,8 @@ export function installExtras(ctx) {
       statusShown = true;
       try {
         const lang = brain?.lang || 'en';
-        const line = await fetchStatusLine({ host, launch, lang });
-        panel?.say?.({ kind: 'info', face: 'smug', line, hold: 3200 });
+        const line = await fetchStatusLine({ host, launch, lang, keys: getVitals?.() });
+        panel?.say?.({ kind: 'info', face: 'smug', line, hold: Math.min(12000, 3200 + line.length * 90) });
         bond?.add?.('click', 1);
         if (capri.free) capri.perform?.('curious', capri.towardCenter?.() ?? 1);
       } catch { /* no pcStatus — skip */ }
@@ -3780,6 +3794,28 @@ export function installExtras(ctx) {
   };
   setInterval(melodyTick, 500);
 
+  // She dances to what's playing (her menu › Dance to music): a hop, a spin, a split, on a loose beat.
+  let lastDance = -Infinity;
+  const danceTick = () => {
+    if (!capri || reducedMotion.matches || getDance?.() === false) return;
+    if (capri.stowed || capri.dormant || capri.hidden) return;
+    if (capri.busy || capri.act || capri.flight || capri.dragging || capri.mode === 'alert') return;
+    if ((capri.p?.alpha ?? 1) < 0.25) return;
+    if (chat?.open || panel?.visible) return; // never over something you're reading or typing
+    if (!['stand', undefined].includes(capri.stance)) return; // sitting / resting: leave her be
+    const media = capri.windows?.media;
+    if (!media || !media.on) return;
+    const now = performance.now();
+    if (now - lastDance < 2600 + Math.random() * 1400) return;
+    lastDance = now;
+    try {
+      const move = ['hop', 'hop', 'spin', 'split', 'curious'][Math.floor(Math.random() * 5)];
+      const p = capri.perform?.(move, Math.random() < 0.5 ? -1 : 1);
+      p?.catch?.(() => {});
+    } catch { /* */ }
+  };
+  setInterval(danceTick, 700);
+
   // Window claim FX: neon frame + eyes while seated
   let lastClaimAt = -Infinity;
   let claimLeave = null;
@@ -4300,7 +4336,7 @@ export function installExtras(ctx) {
     pcReactFx: (kind) => pcReactFx(fx, capri, kind, reactCtx),
     bootLine,
     bootPayload,
-    statusLine: () => fetchStatusLine({ host, launch, lang: brain?.lang || 'en' }),
+    statusLine: () => fetchStatusLine({ host, launch, lang: brain?.lang || 'en', keys: getVitals?.() }),
     clearLink,
     afterScreenHop,
     // wow pack APIs

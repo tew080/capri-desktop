@@ -19,6 +19,7 @@ const news = require('./news');
 const ollama = require('./ollama');
 const setup = require('./setup');
 const apps = require('./apps');
+const vitals = require('./vitals');
 const launch = require('./launch');
 const files = require('./files');
 const { ASSISTANTS, assistant } = require('./assistants');
@@ -350,7 +351,14 @@ function resolveLang(setting) {
 // What the overlay gets: `lang` is the resolved one, `langSetting` what the user picked.
 function rendererConfig() {
   const { apiKeys, ...cfg } = config.load(); // the keys stay here: the overlay only learns which ones are set
-  return { ...cfg, speak: readMemory().speakMode || 'off', keys: Object.keys(apiKeys || {}), assistant: activeAssistant().id, lang: resolveLang(cfg.lang), langSetting: cfg.lang, floorGap: overlayArea().gap };
+  return {
+    ...cfg,
+    vitals: Array.isArray(cfg.vitals) ? cfg.vitals.filter((k) => vitals.KEYS.includes(k)) : vitals.DEFAULT_KEYS,
+    jealousLevel: cfg.jealous === false ? 0 : ([1, 2, 3].includes(cfg.jealousLevel) ? cfg.jealousLevel : 2),
+    chatEvery: Number(cfg.chatEvery) || 0,
+    danceMusic: cfg.danceMusic !== false,
+    speak: readMemory().speakMode || 'off', keys: Object.keys(apiKeys || {}), assistant: activeAssistant().id, lang: resolveLang(cfg.lang), langSetting: cfg.lang, floorGap: overlayArea().gap,
+  };
 }
 
 function updateConfig(patch) {
@@ -418,6 +426,7 @@ function rebuildTray() {
   const watched = activeAssistant();
   const t = Object.fromEntries(Object.entries(TRAY[resolveLang(cfg.lang)]).map(([key, value]) =>
     [key, typeof value === 'string' && watched.id !== 'claude' ? value.replaceAll('Claude Code', watched.name) : value]));
+  const tt = (key) => t[key] ?? TRAY.en[key]; // the new menu lines: English where a language has none yet
 
   const screens = displays();
   const current = targetDisplay().id;
@@ -553,7 +562,37 @@ function rebuildTray() {
     },
     { label: t.wander, type: 'checkbox', checked: cfg.wander, click: (item) => updateConfig({ wander: item.checked }) },
     { label: t.possess, type: 'checkbox', checked: cfg.possess, click: (item) => updateConfig({ possess: item.checked }) },
-    { label: t.jealous, type: 'checkbox', checked: cfg.jealous !== false, click: (item) => updateConfig({ jealous: item.checked }) },
+    {
+      // how she takes your other AIs: off, a little, as she is, or clingy (bond.js)
+      label: t.jealous,
+      submenu: [[0, 'jealousOff'], [1, 'jealousLight'], [2, 'jealousNormal'], [3, 'jealousHeavy']].map(([level, key]) => ({
+        label: tt(key), type: 'radio', checked: rendererConfig().jealousLevel === level,
+        click: () => updateConfig(level ? { jealous: true, jealousLevel: level } : { jealous: false }), // off keeps the level she had
+      })),
+    },
+    {
+      // what she reads out when you hover her (the numbers come from vitals.js)
+      label: tt('vitalsMenu'),
+      submenu: [
+        ['cpu', 'vCpu'], ['ram', 'vRam'], ['gpu0', 'vGpu0'], ['gpu1', 'vGpu1'], ['vram0', 'vVram0'], ['vram1', 'vVram1'],
+        ['diskio', 'vDiskIo'], ['disk', 'vDisk'], ['uptime', 'vUptime'], ['bat', 'vBat'], ['net', 'vNet'],
+      ].map(([key, label]) => ({
+        label: tt(label), type: 'checkbox', checked: rendererConfig().vitals.includes(key),
+        click: (item) => {
+          const now = new Set(rendererConfig().vitals);
+          if (item.checked) now.add(key); else now.delete(key);
+          updateConfig({ vitals: vitals.KEYS.filter((k) => now.has(k)) });
+        },
+      })),
+    },
+    {
+      // how often she comes to ask you to talk (when you've been quiet and nothing else is going on)
+      label: tt('chatEveryMenu'),
+      submenu: [[0, 'chatNever'], [60, 'chatRare'], [30, 'chatNormal'], [15, 'chatOften'], [5, 'chatClingy']].map(([mins, key]) => ({
+        label: tt(key), type: 'radio', checked: (Number(config.load().chatEvery) || 0) === mins, click: () => updateConfig({ chatEvery: mins }),
+      })),
+    },
+    { label: tt('danceMenu'), type: 'checkbox', checked: config.load().danceMusic !== false, click: (item) => updateConfig({ danceMusic: item.checked }) },
     { label: t.pcReact, type: 'checkbox', checked: cfg.pcReact !== false, click: (item) => updateConfig({ pcReact: item.checked }) },
     {
       // her voice out loud (tts.js): off, cartoon babble, or Windows' voice pitched up
@@ -1168,6 +1207,7 @@ function registerIpc() {
       return [];
     }
   });
+  ipcMain.handle('vitals:read', (_e, keys) => vitals.read(keys).catch(() => ({})));
   ipcMain.handle('pc:status', async (_event, what) => {
     return launch.pcStatus(what || 'all');
   });

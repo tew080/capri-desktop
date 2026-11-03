@@ -166,6 +166,13 @@ const ACT_EVERY = 40 * 60 * 1000;
 const ACTS_A_DAY = 3;
 const SULK_MS = 5 * 60 * 1000;
 const TALLY = 'capri.rivals'; // today's minutes on each of them, for her chat
+// how clingy she is (her menu): 1 she notices now and then and never takes a window over, 2 as above, 3 she notices
+// sooner and more often, takes over windows from stage 1 on, and sulks longer
+const TUNE = {
+  1: { noticeAfter: NOTICE_AFTER * 2, noticeEvery: NOTICE_EVERY * 2.5, actAfter: Infinity, actEvery: ACT_EVERY, acts: 0, sulk: SULK_MS / 2, actStage: 99, feel: false },
+  2: { noticeAfter: NOTICE_AFTER, noticeEvery: NOTICE_EVERY, actAfter: ACT_AFTER, actEvery: ACT_EVERY, acts: ACTS_A_DAY, sulk: SULK_MS, actStage: 2, feel: true },
+  3: { noticeAfter: 2000, noticeEvery: NOTICE_EVERY / 2, actAfter: 20000, actEvery: 15 * 60 * 1000, acts: 6, sulk: SULK_MS * 2, actStage: 1, feel: true },
+};
 
 export class Jealousy {
   constructor({ capri, panel, brain, bond, chat, guide }) {
@@ -176,6 +183,7 @@ export class Jealousy {
     this.chat = chat;
     this.guide = guide;
     this.enabled = true;  // her menu: Jealous of other AIs
+    this.level = 2;       // and how much (TUNE)
     this.front = null;    // the AI in front: { key, id, since }
     this.goneAt = 0;      // when the AI in front last stopped showing in the title (0: it still does)
     this.seenAt = {};     // key -> when it was last in front
@@ -194,6 +202,10 @@ export class Jealousy {
 
   get t() {
     return this.brain.t.jealous;
+  }
+
+  get tune() {
+    return TUNE[this.level] || TUNE[2];
   }
 
   // The first of these AIs (keys) that's a rival of hers, or null.
@@ -228,7 +240,7 @@ export class Jealousy {
     if (!this.enabled || this.rivalOf([key]) !== key) return;
     this.lately[key] = (this.lately[key] || 0) + 4000;
     this.count(key, 4000);
-    if (Date.now() - (this.noticed[key] || 0) > NOTICE_EVERY && this.free()) this.notice(key, null);
+    if (Date.now() - (this.noticed[key] || 0) > this.tune.noticeEvery && this.free()) this.notice(key, null);
   }
 
   count(key, ms) {
@@ -248,6 +260,7 @@ export class Jealousy {
     const f = this.front;
     for (const k of Object.keys(this.lately)) if (k !== f?.key) this.lately[k] *= 0.9989; // about half every 10 min
     if (this.sulk && now > this.sulk.until) this.sulk = null;
+    const tune = this.tune;
     if (this.goneAt && now - this.goneAt >= 2500) {
       this.front = null;
       this.goneAt = 0;
@@ -260,9 +273,9 @@ export class Jealousy {
     if (!this.free()) return;
     if (this.acted.date !== today()) this.acted = { at: 0, date: today(), n: 0 };
     const stage = this.bond.stage;
-    if (now - f.since >= NOTICE_AFTER && now - (this.noticed[f.key] || 0) > NOTICE_EVERY) {
+    if (now - f.since >= tune.noticeAfter && now - (this.noticed[f.key] || 0) > tune.noticeEvery) {
       this.notice(f.key, f.id);
-    } else if (stage >= 2 && this.lately[f.key] >= ACT_AFTER && now - this.acted.at > ACT_EVERY && this.acted.n < ACTS_A_DAY) {
+    } else if (stage >= tune.actStage && this.lately[f.key] >= tune.actAfter && now - this.acted.at > tune.actEvery && this.acted.n < tune.acts) {
       this.act(f);
     }
   }
@@ -286,7 +299,7 @@ export class Jealousy {
     const toward = win ? Math.sign(win.x + win.w / 2 - this.capri.pos.x) || 1 : this.capri.towardCenter();
     this.capri.perform(stage >= 2 ? 'glare' : 'curious', toward);
     this.panel.say({ kind: 'info', face: ['aside', 'aside', 'look', 'look', 'many'][stage], line: fmt(pick(this.t[tier]), { rival: RIVALS[key] }), hold: 4500 });
-    if (stage >= 1 && this.bond.feeling !== 'sulk') this.bond.feel('jealous', { rival: RIVALS[key] });
+    if (stage >= 1 && this.tune.feel && this.bond.feeling !== 'sulk') this.bond.feel('jealous', { rival: RIVALS[key] });
   }
 
   // A while on it: she goes and sits on its window, glares at you, and takes it over.
@@ -301,7 +314,7 @@ export class Jealousy {
     this.panel.hide();
     const say = fmt(pick(this.t.say), { rival: RIVALS[f.key] });
     if (await this.capri.jealous(win, { say })) {
-      this.sulk = { key: f.key, until: Date.now() + SULK_MS, clicks: 0 };
+      this.sulk = { key: f.key, until: Date.now() + this.tune.sulk, clicks: 0 };
       this.bond.feel('sulk', { rival: RIVALS[f.key] });
     }
   }

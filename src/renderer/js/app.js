@@ -261,8 +261,14 @@ async function boot() {
   brain.bond = bond;
   chat.bond = bond;
   capri.fondness = bond.stage;
+  // small settings from her menu (main.js keeps them): what she reads out on hover, how clingy she is,
+  // how often she invites you to talk, whether she dances to music
+  const prefs = {
+    vitals: config.vitals, jealousLevel: config.jealousLevel ?? 2, chatEvery: Number(config.chatEvery) || 0, danceMusic: config.danceMusic !== false,
+  };
   const jealousy = new Jealousy({ capri, panel, brain, bond, chat, guide });
   jealousy.enabled = config.jealous !== false;
+  jealousy.level = config.jealousLevel || 2;
   chat.jealousy = jealousy;
   brain.onRival = (key) => jealousy.onRivalEvent(key);
   // Possess eyes only during real jealousy (Jealousy.act → capri.jealous)
@@ -286,6 +292,8 @@ async function boot() {
   const extras = installExtras({
     capri, panel, brain, bond, chat, look, fx, launch: null, host, tts, pc, voice,
     jealousy, guide,
+    getVitals: () => prefs.vitals,
+    getDance: () => prefs.danceMusic,
     getMouse: () => mouse,
   });
 
@@ -444,6 +452,35 @@ async function boot() {
       panel.say({ kind: 'idle', face: 'look', line: pick(brain.t.bond.back), hold: 3500 });
     }, 700);
   };
+  // She comes to ask you to talk (her menu › how often she invites you), only when you've been quiet a while and
+  // nothing else is on: a line in her words, with "talk" / "later". Never twice within the time you picked.
+  let lastInvite = performance.now();
+  setInterval(async () => {
+    const every = (prefs.chatEvery || 0) * 60 * 1000;
+    if (!every || !quiet() || capri.mode === 'work') return;
+    const now = performance.now();
+    if (now - lastInvite < every || now - lastMove < Math.min(every / 2, 90 * 1000)) return; // not while you're busy at the PC
+    lastInvite = now;
+    const name = brain.custom?.userName || '';
+    const line = (await chat.greet().catch(() => null)) || pick(chat.t.hello);
+    if (!quiet()) { lastInvite = now - every + 60 * 1000; return; } // something came up meanwhile: try again in a minute
+    if (capri.stowed) return;
+    capri.wake();
+    capri.perform('hop');
+    let done = false;
+    panel.say({
+      kind: 'idle', face: pick(['grin', 'look', 'smug']), tag: 'CAPRI', line: String(line).replace(/\{name\}/g, name || 'นาย'),
+      actions: [{ id: 'talk', label: brain.lang === 'th' ? 'คุยกัน' : 'Talk', primary: true }, { id: 'later', label: brain.lang === 'th' ? 'ไว้ก่อน' : 'Later' }],
+      onAction: (id) => {
+        if (done) return;
+        done = true;
+        panel.setActions([]);
+        if (id === 'talk') { bond.add('click', 1); chat.start(); } else { panel.hide(); lastInvite = performance.now(); }
+      },
+      hold: 20000,
+    });
+    if (tts.mode !== 'off') tts.say(line);
+  }, 30 * 1000);
 
   // A reminder due: she comes and finds you (on whichever screen you're on), and holds it up until
   // you say it's done or ask for ten more minutes. One that came due while she was off, she brings
@@ -741,6 +778,8 @@ async function boot() {
     mischief.configure(cfg);
     voice.configure(cfg);
     jealousy.enabled = cfg.jealous !== false;
+    jealousy.level = cfg.jealousLevel || 2;
+    Object.assign(prefs, { vitals: cfg.vitals, jealousLevel: cfg.jealousLevel ?? 2, chatEvery: Number(cfg.chatEvery) || 0, danceMusic: cfg.danceMusic !== false });
     followOn = cfg.follow !== false;
     look.configure(cfg);
     pc.enabled = cfg.pcReact !== false;

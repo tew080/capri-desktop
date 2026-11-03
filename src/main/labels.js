@@ -53,6 +53,11 @@ const TRAY = {
     rainTip: 'Morning umbrella tip',
     speak: 'Her voice', speakOff: 'Silent', speakBabble: 'Cartoon babble', speakVoice: 'Real speech (chipmunk)',
     cloudFree: 'free, online', cloudSignin: 'Sign in to Ollama (free cloud models)…',
+    jealousOff: 'Not jealous at all', jealousLight: 'Light (now and then)', jealousNormal: 'Normal', jealousHeavy: 'Heavy (clingy)',
+    vitalsMenu: 'Readings when I hover her', vCpu: 'CPU', vRam: 'RAM', vGpu0: 'GPU 0', vGpu1: 'GPU 1', vVram0: 'VRAM 0', vVram1: 'VRAM 1',
+    vDiskIo: 'Disk read / write', vDisk: 'System drive used', vUptime: 'Uptime', vBat: 'Battery', vNet: 'Network',
+    chatEveryMenu: 'How often she invites me to talk', chatNever: 'Never', chatRare: 'Rarely (~60 min)', chatNormal: 'Normal (~30 min)', chatOften: 'Often (~15 min)', chatClingy: 'Clingy (~5 min)',
+    danceMenu: 'Dance to music',
   },
   es: {
     name: 'Español',
@@ -153,6 +158,11 @@ const TRAY = {
     rainTip: 'เตือนพกร่มตอนเช้า',
     speak: 'เสียงของเธอ', speakOff: 'ปิดเสียง', speakBabble: 'เสียงการ์ตูน (บลิปจ๊อกแจ๊ก)', speakVoice: 'พูดจริง (เสียงเด็กการ์ตูน)',
     cloudFree: 'ฟรี, ออนไลน์', cloudSignin: 'ลงชื่อเข้าใช้ Ollama (โมเดลคลาวด์ฟรี)…',
+    jealousOff: 'ไม่หึงเลย', jealousLight: 'หึงเบา ๆ (นาน ๆ ที)', jealousNormal: 'หึงปกติ', jealousHeavy: 'หึงหนัก (ตามตื๊อ)',
+    vitalsMenu: 'ข้อมูลที่โชว์ตอนชี้ที่เธอ', vCpu: 'CPU', vRam: 'RAM', vGpu0: 'GPU 0', vGpu1: 'GPU 1', vVram0: 'VRAM 0', vVram1: 'VRAM 1',
+    vDiskIo: 'ดิสก์ อ่าน/เขียน', vDisk: 'ดิสก์ที่ใช้ไป (ไดรฟ์ระบบ)', vUptime: 'เปิดเครื่องมานาน', vBat: 'แบตเตอรี่', vNet: 'สถานะเน็ต',
+    chatEveryMenu: 'ความถี่ที่เธอชวนคุย', chatNever: 'ไม่ชวนเลย', chatRare: 'นาน ๆ ที (ทุก ~60 นาที)', chatNormal: 'ปกติ (ทุก ~30 นาที)', chatOften: 'บ่อย (ทุก ~15 นาที)', chatClingy: 'ขี้อ้อน (ทุก ~5 นาที)',
+    danceMenu: 'เต้นตามเพลง',
   },
 };
 

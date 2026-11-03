@@ -44,6 +44,10 @@ const DEFAULTS = {
   newsEvery: 0,      // minutes between the news she tells (news.js); 0: off
   newsSource: 'local', // 'local': the news of your language's edition, 'world': world news (English)
   mischiefIdle: 0,   // minutes of idle before she causes a little chaos on screen (mischief.js); 0: off
+  vitals: ['cpu', 'bat', 'net'], // what she reads out when you hover her (vitals.js KEYS)
+  jealousLevel: 2,   // how clingy she is about other AIs: 1 light, 2 normal, 3 heavy (jealous: false is "off")
+  chatEvery: 0,      // minutes between her invitations to talk when you've been quiet; 0: never
+  danceMusic: true,  // she dances while music plays
   lookAsked: false,  // she told you what looking means (where the picture goes) and you said yes
 };
 
