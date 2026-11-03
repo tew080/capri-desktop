@@ -111,6 +111,8 @@ const CLEAR_RAM_ASK = /(?:เคลียร์\s*แรม|เคลียแ�
 // status / เช็คเครื่อง: RAM CPU GPU disk temp services/top processes uptime
 // รวมคำย่อไทย เช่น ดิส, เครื่อง
 // weather: "อากาศเป็นไงวันนี้", "ฝนตกไหม", "what's the weather" — never the PC's own temperature
+// "จำลอง brute force ให้ดู", "แฮกเว็บปลอมให้ดูหน่อย", "simulate a brute force on a fake login": her hack DEMO (hacksim.js: a prop page, nothing real)
+const HACK_ASK = /brute\s*-?\s*force|บรูท\s*ฟอร์ซ|(?:จำลอง|เล่น|โชว์|แสดง|ทำให้ดู|ลอง).{0,14}(?:แฮก|แฮ็ก|เจาะ|เดา\s*(?:รหัส|password)|login\s*attack)|(?:แฮก|แฮ็ก|เจาะ|เดา).{0,10}(?:เว็บปลอม|หน้า\s*login\s*ปลอม|หน้าล็อกอินปลอม)|(?:simulat|fake|demo).{0,20}(?:hack|brute|login\s*attack|password\s*crack)|hack\s*(?:demo|sim)/i;
 const WEATHER_ASK = /อากาศ|ฝนตก|ฝนจะตก|ร้อนไหม|หนาวไหม|อุณหภูมิข้างนอก|\bweather\b|will it rain|is it raining|temperature outside|forecast/i;
 const WEATHER_NOT = /เครื่อง|คอม|พีซี|\bcpu\b|\bgpu\b|\bpc\b|computer|ซีพียู|การ์ดจอ/i;
 const WEATHER_PLACE = /(?:ที่|ใน|ของ|\bat\b|\bin\b|\bfor\b)\s*([\p{L}\p{M}][\p{L}\p{M} ]{1,30}?)\s*(?:วันนี้|ตอนนี้|หน่อย|ไหม|[?!.]|$)/iu;
@@ -511,6 +513,16 @@ export class Chat {
         this.runStatus(asked.what);
         return;
       }
+      if (asked.kind === 'hack') {
+        // her demo: a fake login page and a make-believe dictionary attack on it, played on screen (hacksim.js)
+        this.turn = 0; this.panel.setChatBusy(false);
+        const line = this.t.hackOk || 'ได้เลย choom! เดี๋ยวฉันเปิดเว็บปลอมของฉันเอง แล้วลองเดารหัสให้ดู (เป็นแค่ฉาก ไม่มีของจริง) คุณช่วยใบ้หรือเปิดกันเดาสู้ฉันได้นะ 😏';
+        this.panel.setFace('smug');
+        this.panel.stream(line, { done: true });
+        this.remember({ role: 'assistant', content: line });
+        setTimeout(() => { try { this.onHack(); } catch (err) { console.error('[capri] hack demo', err); } }, 900);
+        return;
+      }
       // open / media / music / youtube / roblox / web / files / shot / play / name / memo / remind
       if (['open', 'media', 'music', 'youtube', 'roblox', 'web', 'files', 'shot', 'play', 'name', 'memo', 'remind', 'remindOp'].includes(asked.kind)) {
         const done = await this.doNow(asked);
@@ -834,6 +846,7 @@ export class Chat {
     if (after && !VAGUE_SONG.test(after) && !HER_PICK.test(after)) return { kind: 'play', song: songOf(after.replace(/[\s.!?]+$/, '')), before: text.trim().slice(0, both.index) };
     const play = PLAY_ASK.exec(text.trim())?.[1];
     if (play && !VAGUE_SONG.test(play) && !HER_PICK.test(play)) return { kind: 'play', song: songOf(play.replace(/[\s.!?]+$/, '')) };
+    if (this.onHack && HACK_ASK.test(text)) return { kind: 'hack' };
     if (CLEAR_RAM_ASK.test(text)) return { kind: 'ram' };
     if (CLEANUP_ASK.test(text)) return { kind: 'cleanup' };
     if (STATUS_ASK.test(text) || STATUS_HOW.test(text)) {

@@ -57,7 +57,7 @@ const TRAY = {
     vitalsMenu: 'Readings when I hover her', vCpu: 'CPU', vRam: 'RAM', vGpu0: 'GPU 0', vGpu1: 'GPU 1', vVram0: 'VRAM 0', vVram1: 'VRAM 1',
     vDiskIo: 'Disk read / write', vDisk: 'System drive used', vUptime: 'Uptime', vBat: 'Battery', vNet: 'Network',
     chatEveryMenu: 'How often she invites me to talk', chatNever: 'Never', chatRare: 'Rarely (~60 min)', chatNormal: 'Normal (~30 min)', chatOften: 'Often (~15 min)', chatClingy: 'Clingy (~5 min)',
-    danceMenu: 'Dance to music',
+    danceMenu: 'Dance to music', hackDemo: 'Hack demo (fake login page)',
   },
   es: {
     name: 'Español',
@@ -162,7 +162,7 @@ const TRAY = {
     vitalsMenu: 'ข้อมูลที่โชว์ตอนชี้ที่เธอ', vCpu: 'CPU', vRam: 'RAM', vGpu0: 'GPU 0', vGpu1: 'GPU 1', vVram0: 'VRAM 0', vVram1: 'VRAM 1',
     vDiskIo: 'ดิสก์ อ่าน/เขียน', vDisk: 'ดิสก์ที่ใช้ไป (ไดรฟ์ระบบ)', vUptime: 'เปิดเครื่องมานาน', vBat: 'แบตเตอรี่', vNet: 'สถานะเน็ต',
     chatEveryMenu: 'ความถี่ที่เธอชวนคุย', chatNever: 'ไม่ชวนเลย', chatRare: 'นาน ๆ ที (ทุก ~60 นาที)', chatNormal: 'ปกติ (ทุก ~30 นาที)', chatOften: 'บ่อย (ทุก ~15 นาที)', chatClingy: 'ขี้อ้อน (ทุก ~5 นาที)',
-    danceMenu: 'เต้นตามเพลง',
+    danceMenu: 'เต้นตามเพลง', hackDemo: 'โชว์แฮก (เว็บล็อกอินปลอม)',
   },
 };
 

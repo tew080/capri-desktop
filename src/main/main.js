@@ -622,6 +622,7 @@ function rebuildTray() {
       label: t.mischief,
       submenu: [
         { label: t.mischiefNow, click: () => sendCommand('mischief', { force: true }) },
+        { label: tt('hackDemo'), click: () => sendCommand('hacksim') },
         { type: 'separator' },
         { label: t.mischiefWhen, enabled: false },
         ...[0, 5, 10, 30, 60].map((mins) => ({

@@ -537,6 +537,12 @@ export class Mischief {
         await napSmooth(1800);
       }],
 
+      // her hack demo: a fake login page of hers and a make-believe dictionary attack on it (hacksim.js: a prop, nothing real)
+      ['hack', 1, 12 * 60000, null, 70000, async () => {
+        if (!this.hack || this.hack.running) return;
+        await this.hack.run({ auto: true, shouldStop: () => Boolean(this.stop) });
+      }],
+
       // her own look at your PC (a window of hers, read only), then she closes it
       ['pc', 1.5, 8 * 60000, 'pc', 40000, async () => {
         const res = await host.pcStatus('all').catch(() => null);

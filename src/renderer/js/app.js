@@ -18,6 +18,7 @@ import { linesFor } from './lines.js';
 import { pick, fmt, reducedMotion } from './util.js';
 import { installExtras, bootPayload } from './extras.js';
 import { Mischief } from './mischief.js';
+import { HackSim } from './hacksim.js';
 
 const host = window.host;
 
@@ -102,6 +103,7 @@ async function boot() {
 
   // Click-through everywhere except on her body, the panel and her biochip.
   let interactive = false;
+  let hack = null; // HackSim, made once her layers exist
   let mouse = null;
   const setInteractive = (on) => {
     if (on === interactive) return;
@@ -115,7 +117,7 @@ async function boot() {
     const r = panel.rect();
     const onPanel = r && mouse.x >= r.left && mouse.x <= r.right && mouse.y >= r.top && mouse.y <= r.bottom;
     document.body.style.cursor = onChip() ? 'pointer' : '';
-    return setInteractive(Boolean(onPanel || capri.hit(mouse.x, mouse.y) || onChip()));
+    return setInteractive(Boolean(onPanel || capri.hit(mouse.x, mouse.y) || onChip() || hack?.contains(mouse.x, mouse.y)));
   };
   // Her biochip: her eyes on it follow the pointer over it, and she comes out when you click it
   // (only then, so the pointer passing through that corner doesn't call her back).
@@ -771,8 +773,12 @@ async function boot() {
   });
 
   // She gets bored when the PC is left alone (mischief.js, her menu › Mischief)
+  // her hack demo (hacksim.js): a fake login page and a make-believe attack on it, from her chat or her Mischief menu
+  hack = new HackSim({ capri, fx, panel, voice, brain, tts, chat });
+  chat.onHack = () => hack.run({});
   const mischief = new Mischief({ capri, fx, panel, voice, tts, extras, host, brain, chat, guide, screens: () => screens, goToScreen });
   mischief.configure(config);
+  mischief.hack = hack;
 
   host.onConfig((cfg) => {
     mischief.configure(cfg);
@@ -940,6 +946,9 @@ async function boot() {
         if (capri.stowed || capri.dormant || chat.open || guide.running || panel.visible) break; // not over something else
         capri.perform('hop');
         panel.say({ kind: 'info', face: 'look', line: cmd.line, hold: 7000 });
+        break;
+      case 'hacksim': // her menu › Mischief › hack demo
+        hack.run({});
         break;
       case 'mischief': // "Mischief now" in her menu (the idle trigger runs from mischief.js itself)
         mischief.run({ force: Boolean(cmd.force) });
