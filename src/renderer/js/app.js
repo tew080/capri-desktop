@@ -913,7 +913,7 @@ async function boot() {
         }
         capri.wake();
         capri.perform('hop');
-        panel.say({ kind: 'info', face: 'look', line: cmd.line, hold: Math.min(16000, 6000 + cmd.line.length * 60) });
+        panel.say({ kind: 'info', face: 'look', line: cmd.line, hold: Math.min(45000, 14000 + cmd.line.length * 140) }); // news: time to read it (about 14 s + 0.14 s a character)
         if (tts.mode !== 'off') tts.say(cmd.line);
         break;
       case 'satellite': // the whole sequence, on demand (tray)

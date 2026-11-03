@@ -35,6 +35,28 @@ export class Panel {
     this.labels = labels;
     this.line = panel.querySelector('.panel__line');
     this.line.style.whiteSpace = 'pre-line'; // a list is one line each
+    // a long answer shows in full, scrolling if it's tall, never cut to "…" (inline !important wins over the stylesheet's clamp)
+    for (const [k, v] of [['display', 'block'], ['-webkit-line-clamp', 'unset'], ['line-clamp', 'unset'], ['text-overflow', 'clip'],
+      ['height', 'auto'], ['max-height', 'min(55vh, 420px)'], ['overflow-y', 'auto'], ['overflow-wrap', 'anywhere'],
+      ['scrollbar-width', 'none']]) this.line.style.setProperty(k, v, 'important');
+    // no scrollbar drawn (a long answer still scrolls with the wheel / touch)
+    if (!document.getElementById('capri-line-noscroll')) {
+      const css = document.createElement('style');
+      css.id = 'capri-line-noscroll';
+      css.textContent = '.panel__line::-webkit-scrollbar{display:none;width:0;height:0}';
+      document.head.append(css);
+    }
+    // while the pointer is on the panel, the hold timer waits: time to read, and to select / copy
+    this.hovered = false;
+    this.el.addEventListener('pointerenter', () => { this.hovered = true; clearTimeout(this.hideTimer); });
+    this.el.addEventListener('pointerleave', () => {
+      this.hovered = false;
+      const msg = this.current;
+      if (msg?.hold && this.visible && !msg.chat) {
+        clearTimeout(this.hideTimer);
+        this.hideTimer = setTimeout(() => this.hide(), Math.min(msg.hold, 5000));
+      }
+    });
     this.stopStream(); // her chat answer, decoding in (stream)
     this.streamTo = [];
     this.portrait = panel.querySelector('.panel__face img');
