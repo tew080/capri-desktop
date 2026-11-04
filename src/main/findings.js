@@ -21,6 +21,12 @@ const CATALOG = {
   6379:  { svc: 'Redis', sev: 'high', block: true, key: 'redis', what: 'ฐานข้อมูล Redis', why: 'ค่าเริ่มต้นมักไม่มีรหัสผ่าน ใครต่อได้ก็อ่าน/เขียนข้อมูลได้', warn: 'แอปบนเครื่องอื่นที่ต่อ Redis นี้จะต่อไม่ได้' },
   9200:  { svc: 'Elasticsearch', sev: 'high', block: true, key: 'elasticsearch', what: 'Elasticsearch', why: 'มักเปิดโดยไม่มีรหัสผ่าน ใครต่อได้ก็อ่านข้อมูลได้', warn: 'แอปบนเครื่องอื่นที่ต่อ Elasticsearch นี้จะต่อไม่ได้' },
   27017: { svc: 'MongoDB', sev: 'high', block: true, key: 'mongodb', what: 'ฐานข้อมูล MongoDB', why: 'มักเปิดโดยไม่มีรหัสผ่าน ใครต่อได้ก็อ่านข้อมูลได้', warn: 'แอปบนเครื่องอื่นที่ต่อ MongoDB นี้จะต่อไม่ได้' },
+  // Web control panels — should not be reachable from the internet without IP restriction or VPN
+  8083:  { svc: 'Hestia CP', sev: 'medium', block: false, key: null, what: 'แผงควบคุม Hestia Control Panel', why: 'แผงจัดการเซิร์ฟเวอร์ที่เปิดสู่อินเทอร์เน็ตโดยตรงเสี่ยงต่อการ brute-force และช่องโหว่ของซอฟต์แวร์แผงควบคุม', warn: 'ผู้ดูแลระบบจะเข้าแผงควบคุม Hestia จากเครื่องอื่นไม่ได้จนกว่าจะเปิดกฎ firewall อีกครั้ง' },
+  10000: { svc: 'Webmin', sev: 'medium', block: false, key: null, what: 'แผงควบคุม Webmin (MiniServ)', why: 'แผงจัดการเซิร์ฟเวอร์ที่เปิดสู่อินเทอร์เน็ตโดยตรงเสี่ยงต่อการ brute-force และช่องโหว่ที่รู้จักกันของ Webmin', warn: 'ผู้ดูแลระบบจะเข้า Webmin จากเครื่องอื่นไม่ได้จนกว่าจะเปิดกฎ firewall อีกครั้ง' },
+  // SIP / telephony — often probed by VoIP scanners
+  5060:  { svc: 'SIP', sev: 'low', block: false, key: null, what: 'บริการ VoIP / SIP (Session Initiation Protocol)', why: 'พอร์ต SIP ที่เปิดสู่อินเทอร์เน็ตมักถูก VoIP scanner สุ่มหาและโจมตีด้วย toll fraud ถ้าไม่ได้ใช้ VoIP ควรปิด', warn: 'บริการ VoIP จะรับสายภายนอกไม่ได้' },
+  2000:  { svc: 'Cisco SCCP', sev: 'low', block: false, key: null, what: 'Cisco Skinny (SCCP) หรือบริการอื่นที่ใช้พอร์ต 2000', why: 'ถ้าไม่ได้ใช้ระบบโทรศัพท์ Cisco การเปิดพอร์ตนี้ไม่จำเป็น', warn: 'โทรศัพท์ IP ของ Cisco อาจลงทะเบียนไม่ได้' },
 };
 const BLOCKABLE = new Set(Object.keys(CATALOG).filter((p) => CATALOG[p].block).map(Number));
 const SERVICE_FIX = { 23: 'TlntSvr', 21: 'FTPSVC' }; // a Windows service that is the whole reason for the port
@@ -74,8 +80,14 @@ function portFinding(p, ctx) {
     why: exposure === 'local'
       ? `ฟังเฉพาะภายในเครื่องนี้ เครื่องอื่นในเครือข่ายเข้าไม่ถึง จึงไม่ถือเป็นปัญหา (${cat.why})`
       : cat.why,
-    doing, usedBy, intelKey: cat.key, fixes: [], manual: null,
+    doing, usedBy, intelKey: cat.key, product: p.product || '', fixes: [], manual: null,
   };
+
+  // an FTP server that answers TLS: "plain text" is only true if TLS is not required, and a scan cannot tell which
+  if (p.port === 21 && exposure !== 'local' && /TLSv1\.[0-3]/.test(p.scriptOut || '')) {
+    f.severity = 'medium';
+    f.why = 'เซิร์ฟเวอร์ FTP นี้รองรับ TLS แต่การสแกนบอกไม่ได้ว่าบังคับใช้หรือไม่ ถ้าไม่บังคับ ใครต่อด้วย FTP ธรรมดาก็ยังส่งรหัสผ่านเป็นข้อความเปล่าได้';
+  }
 
   if (exposure !== 'local' && ctx.local) {
     const inUse = usedBy.remotes.length > 0;
@@ -107,6 +119,24 @@ function portFinding(p, ctx) {
 
 function configFindings(ports) {
   const out = [];
+  // ssl-cert prints "Not valid after: 2025-10-09T07:49:14": the same certificate is often on many ports, so one finding
+  const expired = [];
+  for (const p of ports) {
+    const m = /Not valid after:\s*(\d{4}-\d{2}-\d{2})/.exec(p.scriptOut || '');
+    if (m && Date.parse(m[1]) < Date.now()) expired.push({ port: p.port, date: m[1] });
+  }
+  if (expired.length) {
+    const list = expired.map((e) => e.port).join(', ');
+    out.push({
+      id: 'cert-expired', kind: 'config', port: expired[0].port, exposure: 'lan', severity: 'medium',
+      title: `ใบรับรอง TLS หมดอายุแล้ว (พอร์ต ${list}) — หมดอายุเมื่อ ${expired[0].date}`,
+      what: 'ใบรับรอง TLS ที่หมดอายุ',
+      why: 'ใบรับรองที่หมดอายุทำให้โปรแกรมฝั่งผู้ใช้เตือนหรือปฏิเสธการเชื่อมต่อ และยืนยันตัวตนของเซิร์ฟเวอร์ไม่ได้',
+      doing: [`ssl-cert อ่านวันหมดอายุได้ ${expired[0].date} บนพอร์ต ${list}`], usedBy: { text: 'ตรวจจากภายนอก จึงไม่ทราบว่าใครต่ออยู่', remotes: [], local: 0 }, fixes: [],
+      manual: 'ต่ออายุหรือออกใบรับรองใหม่ แล้วตั้งให้ต่ออายุอัตโนมัติ',
+      refs: [{ title: 'Let’s Encrypt — เอกสารการออกและต่ออายุใบรับรอง', url: 'https://letsencrypt.org/docs/', source: 'Let’s Encrypt' }],
+    });
+  }
   for (const p of ports) {
     const s = p.scriptOut || '';
     if (!s) continue;
@@ -151,7 +181,7 @@ function buildFindings(ctx) {
   const list = [];
   for (const p of byPort.values()) {
     if (CATALOG[p.port]) { const f = portFinding(p, ctx); if (f) list.push(f); }
-    else if (CLEARTEXT.test(p.service || '') && (!ctx.local || usage(ctx.snap, p.port)?.lan !== false)) {
+    else if (CLEARTEXT.test(p.service || '') && p.tunnel !== 'ssl' && !/\b(?:STARTTLS|STLS)\b/.test(p.scriptOut || '') && (!ctx.local || usage(ctx.snap, p.port)?.lan !== false)) {
       list.push({
         id: `clear-${p.port}`, kind: 'cleartext', port: p.port, proto: p.proto || 'tcp', severity: 'low', exposure: 'lan',
         title: `พอร์ต ${p.port} (${p.service}) ส่งข้อมูลแบบไม่เข้ารหัส`, what: `บริการ ${p.service} แบบไม่เข้ารหัส`,

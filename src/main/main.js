@@ -24,6 +24,7 @@ const launch = require('./launch');
 const files = require('./files');
 const netscan = require('./netscan');
 const privacy = require('./privacy');       // who may read what about this PC (scan results, ports, IPs)
+const evidence = require('./evidence');     // what her local model reads from a scan (facts + numbered references) and the check on its answer
 const remediate = require('./remediate');   // the only code that changes the PC for security, and its fix log
 const { ASSISTANTS, assistant } = require('./assistants');
 const activeAssistant = () => assistant(config.load().assistant); // Claude Code or Codex
@@ -1282,11 +1283,21 @@ function registerIpc() {
     // privacy.js: a model on this PC through a loopback address, or nothing. Key, online, cloud, remote host, Claude Code: refused.
     const gate = privacy.canShare(cfg, model, { llm, ollama });
     if (!gate.ok) return { ok: false, code: 'online' };
-    const prompt = String(text || '').slice(0, 3500);
-    const messages = [{ role: 'system', content: String(persona || '') }, { role: 'user', content: prompt }];
+    // a vuln / external scan made a moment ago: main builds the evidence itself (the overlay's text is not trusted for it).
+    // Anything else (lan, capture, bandwidth…) keeps the old path with the text the overlay sent.
+    const scan = netscan.lastScan();
+    const fresh = scan && Date.now() - scan.at < 30 * 60 * 1000 && ['vuln', 'external'].includes(scan.net?.kind);
+    const pack = fresh ? evidence.buildPack(scan.net) : null;
+    const messages = pack
+      ? [{ role: 'system', content: `${String(persona || '')}\n\n${evidence.RULES}` }, { role: 'user', content: pack.text }]
+      : [{ role: 'system', content: String(persona || '') }, { role: 'user', content: String(text || '').slice(0, 3500) }];
     try {
       const answer = await llm.chat(cfg.provider, llmConfig(cfg), { model, messages }, () => {}, AbortSignal.timeout(90000));
-      return { ok: true, text: answer, model };
+      if (!pack) return { ok: true, text: answer, model, sources: [] };
+      const out = evidence.verify(answer, pack);
+      // counts only: neither the scan nor the answer goes into the log
+      remediate.logEvent({ type: 'ai-analyze', model, kind: scan.net.kind, refs: pack.refs.length, cited: out.sources.length, removed: out.removed.length });
+      return { ok: true, text: out.text, model, sources: out.sources };
     } catch (err) {
       return { ok: false, code: err.code || null, error: err.message };
     }

@@ -701,6 +701,11 @@ async function netStatus(what) {
     return net.scan('host', arg);
   if (kind === 'lan')
     return net.scan('lan');
+  // External: 'net:external:domain-or-ip'
+  // Consent is enforced in chat.js before this is ever called.
+  // netscan.checkExternalTarget() validates the target string (no shell chars, must be a valid hostname or public IP).
+  if (kind === 'external' && arg)
+    return net.scan('external', arg);
   return net.scan('self');
 }
 
@@ -716,6 +721,7 @@ async function pcStatus(what = 'all') {
   //   'net:ports:ip:range'          → custom port range scan (e.g. 'net:ports:192.168.1.1:1-1024')
   //   'net:capture[:seconds]'       → tshark traffic snapshot
   //   'net:bandwidth[:seconds]'     → tshark in/out throughput measurement
+  //   'net:external:host-or-ip'     → external host scan (consent required in chat.js)
   if (/^net(:|$)/i.test(String(what))) return netStatus(String(what));
   if (/^weather(:|$)/i.test(String(what))) return weather(String(what).slice(8));
   const w = String(what || 'all').toLowerCase();

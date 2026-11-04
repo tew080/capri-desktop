@@ -63,6 +63,11 @@ const TRAY = {
     netGateway: 'Scan my router', netVuln: 'Security check this PC', netBandwidth: 'Measure my connection speed', netOs: 'Detect OS of a device…', netPorts: 'Scan a port range…',
     netAI: 'Let my local model read the results', netAIOnline: 'Results are never sent to an online model or key',
     netFixes: 'Fix history / undo', netIntel: 'Check public vulnerability lists (CISA) — nothing of mine is sent',
+    netExternal: 'Scan host (domain or public IP)…',
+    netExternalTitle: 'Scan',
+    netExternalConsent: (host) => `Scan ${host}?\n• Reads open ports and service banners`,
+    netExternalConfirm: '✓ Confirm', netExternalCancel: '✗ Cancel',
+    //netExternalNote: 'Authorised lab scan only — not for use on targets you don\'t own',
   },
   es: {
     name: 'Español',
@@ -173,6 +178,11 @@ const TRAY = {
     netGateway: 'สแกนเราเตอร์', netVuln: 'เช็คความปลอดภัยเครื่องนี้', netBandwidth: 'วัดความเร็วเน็ต', netOs: 'เดา OS ของอุปกรณ์…', netPorts: 'สแกนช่วงพอร์ตที่ต้องการ…',
     netAI: 'ให้โมเดลในเครื่องช่วยอ่านผล', netAIOnline: 'โมเดลออนไลน์/API key: ไม่ส่งผลสแกนเด็ดขาด',
     netFixes: 'ประวัติการแก้ไข / ย้อนกลับ', netIntel: 'เทียบกับรายการช่องโหว่สาธารณะ (CISA) — ไม่ส่งข้อมูลเครื่องออกไป',
+    netExternal: 'สแกน host (domain หรือ public IP)…',
+    netExternalTitle: 'สแกนระบบ',
+    netExternalConsent: (host) => `ยืนยันสแกน ${host} ?\n• อ่านพอร์ตและบริการที่เปิดอยู่`,
+    netExternalConfirm: '✓ ยืนยัน', netExternalCancel: '✗ ยกเลิก',
+    //netExternalNote: 'สแกนเฉพาะระบบ lab ที่ได้รับอนุญาตเท่านั้น — ห้ามนำไปใช้กับเป้าหมายที่ไม่ได้รับอนุญาต',
   },
 };
 

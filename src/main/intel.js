@@ -17,6 +17,7 @@ const { app } = require('electron');
 const KEV_URL = 'https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json';
 const ALLOW = [{ host: 'www.cisa.gov', prefix: '/sites/default/files/feeds/' }];
 const TTL = 24 * 3600 * 1000;
+const CACHE_V = 2;
 const MAX_BYTES = 8 * 1024 * 1024;
 
 // service key (findings.js CATALOG) → words in the public CVE title / description
@@ -54,7 +55,7 @@ function readCache() {
 
 async function loadKev() {
   const cached = readCache();
-  if (cached && Date.now() - cached.at < TTL) return cached;
+  if (cached && cached.v === CACHE_V && Date.now() - cached.at < TTL) return cached; // an older copy has no vendor / product fields: fetch again
   let record = null;
   try {
     const url = guardUrl(KEV_URL);
@@ -65,8 +66,9 @@ async function loadKev() {
     const j = JSON.parse(buf.toString('utf8'));
     const items = (j.vulnerabilities || []).filter((v) => /^CVE-\d{4}-\d{4,7}$/.test(v.cveID)).map((v) => ({
       cve: v.cveID, name: String(v.vulnerabilityName || '').slice(0, 160), text: `${v.product || ''} ${v.shortDescription || ''}`.slice(0, 400), added: String(v.dateAdded || ''),
+      vendor: String(v.vendorProject || '').slice(0, 60), product: String(v.product || '').slice(0, 80), ransomware: v.knownRansomwareCampaignUse === 'Known',
     }));
-    record = { at: Date.now(), version: j.catalogVersion || '', items };
+    record = { v: CACHE_V, at: Date.now(), version: j.catalogVersion || '', items };
     fs.mkdirSync(dir(), { recursive: true });
     fs.writeFileSync(cacheFile(), JSON.stringify(record));
     log({ ok: true, url, items: items.length });
@@ -81,11 +83,31 @@ function log(info) {
   try { require('./remediate').logEvent({ type: 'intel-fetch', ...info }); } catch { /* the log is best effort here */ }
 }
 
-function match(items, key) {
+// the first word of what Nmap read ("vsftpd 2.0.8 or later" → "vsftpd"); '' when it read nothing useful
+const GENERIC = new Set(['microsoft', 'apache', 'oracle', 'linux', 'windows', 'cisco', 'google', 'ibm', 'sun']);
+const productToken = (p) => /^[a-z][a-z0-9._-]{2,}/i.exec(String(p || '').trim())?.[0].toLowerCase() || '';
+
+// Only what an entry is ABOUT counts (vendor / product / title), never words inside its description: a MOVEit entry
+// that mentions "MySQL" in its text is not a MySQL vulnerability.
+//   product known  → the entry must be about THAT product (vsftpd is not Wing FTP): scope 'product'
+//   product unknown → every entry of that kind of service: scope 'family', and it is said so
+function match(items, key, product) {
   const re = PATTERNS[key];
   if (!re) return null;
-  const hits = items.filter((v) => re.test(v.name) || re.test(v.text)).sort((a, b) => b.added.localeCompare(a.added));
-  return hits.length ? { total: hits.length, latest: hits.slice(0, 3) } : null;
+  const token = productToken(product);
+  const about = (v) => `${v.vendor || ''} ${v.product || ''} ${v.name}`;
+  let hits;
+  if (!token) hits = items.filter((v) => re.test(about(v)));
+  else {
+    // "vsftpd" does not match /\bFTP\b/ but IS the product: the name decides. A vendor word that covers hundreds of unrelated
+    // entries (microsoft, apache, oracle…) must also fit the kind of service.
+    hits = items.filter((v) => new RegExp(`\\b${token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'i').test(about(v)));
+    if (GENERIC.has(token)) hits = hits.filter((v) => re.test(about(v)));
+  }
+  hits.sort((a, b) => b.added.localeCompare(a.added));
+  return hits.length
+    ? { total: hits.length, ransomware: hits.filter((v) => v.ransomware).length, latest: hits.slice(0, 3), scope: token ? 'product' : 'family', token }
+    : null;
 }
 
 /** adds f.intel and f.refs to findings that have an intelKey. Never throws; never sends anything about the findings. */
@@ -94,11 +116,13 @@ async function enrich(findings, cfg) {
   const kev = await loadKev();
   if (!kev?.items?.length) return { used: false };
   for (const f of findings) {
-    const m = f.intelKey ? match(kev.items, f.intelKey) : null;
+    const m = f.intelKey ? match(kev.items, f.intelKey, f.product) : null;
     if (!m) continue;
     f.intel = {
-      source: 'CISA KEV', total: m.total, latest: m.latest.map((x) => x.cve), fetched: new Date(kev.at).toISOString().slice(0, 10),
-      text: `CISA (หน่วยงานความมั่นคงไซเบอร์สหรัฐฯ) มีรายการช่องโหว่ของ ${f.title.split(' — ')[0].replace(/^พอร์ต \d+ /, '')} ที่ถูกโจมตีจริง ${m.total} รายการ ล่าสุด ${m.latest[0].cve} — นี่คือข้อมูลทั่วไปของบริการประเภทนี้ ไม่ได้แปลว่าเครื่องนี้มีช่องโหว่เหล่านั้น`,
+      source: 'CISA KEV', total: m.total, ransomware: m.ransomware, latest: m.latest.map((x) => x.cve), fetched: new Date(kev.at).toISOString().slice(0, 10),
+      text: m.scope === 'product'
+        ? `CISA (หน่วยงานความมั่นคงไซเบอร์สหรัฐฯ) มีรายการช่องโหว่ของ ${m.token} ที่ถูกโจมตีจริง ${m.total} รายการ ล่าสุด ${m.latest[0].cve}${m.ransomware ? ` (ในนี้ ${m.ransomware} รายการมีรายงานว่าใช้ในแคมเปญแรนซัมแวร์)` : ''} — จับคู่จากชื่อโปรแกรมที่ Nmap อ่านได้ ยังไม่ได้ยืนยันเวอร์ชัน จึงไม่ได้แปลว่าเครื่องนี้มีช่องโหว่เหล่านั้น`
+        : `CISA (หน่วยงานความมั่นคงไซเบอร์สหรัฐฯ) มีรายการช่องโหว่ของบริการประเภท ${f.what} ที่ถูกโจมตีจริง ${m.total} รายการ ล่าสุด ${m.latest[0].cve}${m.ransomware ? ` (ในนี้ ${m.ransomware} รายการมีรายงานว่าใช้ในแคมเปญแรนซัมแวร์)` : ''} — เป็นข้อมูลทั่วไปของบริการประเภทนี้ ไม่ทราบว่าเครื่องนี้ใช้โปรแกรมของยี่ห้อไหน รายการอาจเป็นของคนละยี่ห้อ และไม่ได้แปลว่าเครื่องนี้มีช่องโหว่เหล่านั้น`,
     };
     f.refs = m.latest.map((x) => ({ title: `${x.cve} — ${x.name}`.slice(0, 90), url: `https://nvd.nist.gov/vuln/detail/${x.cve}`, source: 'NVD / CISA KEV' }));
   }

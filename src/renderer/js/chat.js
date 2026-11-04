@@ -126,9 +126,38 @@ const NET_BW = /ความเร็ว|speed|bandwidth|แบนด์วิ�
 const NET_OS = /\bos\b|ระบบปฏิบัติการ|operating system|os detection|เดา\s*os|ระบุ\s*os/i;
 const NET_PORTRANGE = /(\d{1,5})\s*[-–]\s*(\d{1,5})/;
 const FIX_HISTORY = /ประวัติ(?:การ)?แก้(?:ไข)?|(?:ย้อนกลับ|ยกเลิก).{0,10}(?:การแก้|ที่แก้|ที่เธอแก้|ที่ฉันให้แก้)|ล็อก(?:การ)?แก้|(?:undo|revert|roll\s*back).{0,14}(?:fix|change)|fix\s*(?:log|history)/i;
+
+// ── External target detection ────────────────────────────────────
+// Matches: "สแกน example.com", "scan sru.ac.th", "nmap 203.1.2.3", "ตรวจสอบ sru.ac.th",
+//          "เช็คช่องโหว่ myserver.io", "scan port myapp.com", "vulnerability check example.org"
+// A domain must contain at least one dot and look like a real hostname (not a single word).
+const NET_DOMAIN_RE = /(?:สแกน|scan|nmap|ตรวจ|เช็ค|เช็ก|check|ดู|หา|vuln|ช่องโหว่|security)\s+((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,})/i;
+// A bare public IP that is not private — catches "scan 203.150.1.1", "nmap 8.8.8.8"
+const NET_PUBLIC_IP_RE = /(?:สแกน|scan|nmap|ตรวจ|เช็ค|เช็ก|check)\s+(\d{1,3}(?:\.\d{1,3}){3})\b/i;
+const PRIVATE_RANGES = /^(10\.|127\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.)/;
+
+function extractExternalTarget(text) {
+  // domain first
+  const dm = NET_DOMAIN_RE.exec(text);
+  if (dm) return dm[1].toLowerCase();
+  // then bare public IP
+  const pm = NET_PUBLIC_IP_RE.exec(text);
+  if (pm && !PRIVATE_RANGES.test(pm[1])) return pm[1];
+  return null;
+}
+
+// External scan also triggers NET_ASK if the text has a domain + scan keyword
+const NET_ASK_EXTERNAL = /(?:สแกน|scan|nmap|ตรวจ|เช็ค|เช็ก|check).{0,30}(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}/i;
+
 function netAsk(text) {
   if (FIX_HISTORY.test(text)) return { what: 'fixes' };
-  if (!NET_ASK.test(text)) return null;
+
+  // ── External target (domain / public IP) — check before the private-IP paths ──
+  const extTarget = extractExternalTarget(text);
+  if (extTarget) return { what: `net:external:${extTarget}`, external: true, target: extTarget };
+
+  if (!NET_ASK.test(text) && !NET_ASK_EXTERNAL.test(text)) return null;
+
   const ip = NET_IP.exec(text)?.[1];
   const secs = Number(NET_SECONDS.exec(text)?.[1]) || 15;
   if (NET_CAPTURE.test(text)) return { what: `net:capture:${secs}` };
@@ -1289,10 +1318,66 @@ export class Chat {
   }
 
   // Nmap / Wireshark on her own PC and your own network (netscan.js does the scan and refuses anything else).
+  // External lab scans go through a separate consent gate.
   // Her plain words about it are written here from the result. Her model reads it too, but only one running on this PC.
   async runNet(what = 'net') {
     if (what === 'fixes') return this.runFixHistory();
     const cfg = await this.host.getConfig().catch(() => ({}));
+
+    // ── External scan consent gate ──────────────────────────────
+    // A fresh consent is always shown for external targets (separate from the LAN consent),
+    // because the user must confirm they own / are authorised to test the target.
+    if (what.startsWith('net:external:')) {
+      const extTarget = what.slice('net:external:'.length);
+      if (!cfg.netAsked) {
+        // LAN consent first (needed to unlock net tools), then come back
+        this.panel.setFace('look');
+        this.panel.stream(
+          'ก่อนนะ choom: ฉันจะใช้ Nmap สแกนพอร์ตและตรวจสอบช่องโหว่เบื้องต้น '
+          + 'ฉันอ่านแค่ภาพรวม ไม่โจมตีจริง ถ้าโมเดลของฉันรันอยู่ในเครื่องนี้ ผลจะให้มันช่วยอ่านได้ (ปิดได้ในเมนู) '
+          + 'แต่ถ้าฉันใช้ API key หรือโมเดลออนไลน์ ผลสแกนจะไม่ถูกส่งออกไปเด็ดขาด ตกลงไหม?',
+          { done: true },
+        );
+        this.panel.setActions([{ id: 'yes', label: 'ได้เลย', primary: true }, { id: 'no', label: 'ยังก่อน' }], async (choice) => {
+          this.panel.setActions([]);
+          if (choice !== 'yes') {
+            this.panel.setFace('aside');
+            this.panel.stream('โอเค ไม่สแกนก็ได้ ถ้าเปลี่ยนใจบอกฉันนะ', { done: true });
+            return;
+          }
+          await this.host.setConfig({ netAsked: true });
+          this.runNet(what);
+        });
+        return;
+      }
+      // External-specific consent: confirm the target
+      this.panel.setFace('look');
+      const consentTh = `ยืนยันก่อนนะ — ฉันจะสแกน ${extTarget} ด้วย Nmap\n`
+        + `• อ่านพอร์ตและบริการที่เปิดอยู่ + ตรวจ config เบื้องต้น\n`
+        + `• ไม่โจมตีจริง ไม่ใช้ exploit\n`
+        + `• ทำได้เฉพาะระบบที่คุณเป็นเจ้าของหรือได้รับอนุญาตให้ทดสอบเท่านั้น\n\n`
+        + `Confirm — I'll scan ${extTarget} with Nmap\n`
+        + `• Reads open ports and service banners + basic config checks\n`
+        + `• No real attacks, no exploits\n`
+        + `• Authorised targets only — your own lab system`;
+      this.panel.stream(consentTh, { done: true });
+      this.panel.setActions(
+        [{ id: 'yes', label: '✓ ยืนยัน / Confirm', primary: true }, { id: 'no', label: '✗ ยกเลิก / Cancel' }],
+        async (choice) => {
+          this.panel.setActions([]);
+          if (choice !== 'yes') {
+            this.panel.setFace('aside');
+            this.panel.stream('โอเค ยกเลิกแล้ว / Cancelled.', { done: true });
+            return;
+          }
+          // Consent granted — proceed with the scan (re-enter runNet, skipping the gate)
+          this._externalConsented = (this._externalConsented || new Set()).add(extTarget);
+          this._runNetAfterConsent(what);
+        },
+      );
+      return;
+    }
+    // ── LAN / self scan consent (original) ───────────────────────────────────
     if (!cfg.netAsked) {
       this.panel.setFace('look');
       this.panel.stream(
@@ -1313,6 +1398,12 @@ export class Chat {
       });
       return;
     }
+    return this._runNetAfterConsent(what);
+  }
+
+  // The actual scan runner — called after all consent checks pass.
+  async _runNetAfterConsent(what) {
+    const cfg = await this.host.getConfig().catch(() => ({}));
     const tools = await this.host.netTools().catch(() => ({}));
     const capture = what.startsWith('net:capture');
     const isBandwidth = what.startsWith('net:bandwidth');
@@ -1338,6 +1429,7 @@ export class Chat {
       os:        `กำลังเดา OS ของ ${parts[2] || '?'} อยู่…`,
       vuln:      `ตรวจสอบช่องโหว่เบื้องต้น ${parts[2] || 'เครื่องนี้'} อยู่นะ ใช้เวลาซักครู่…`,
       ports:     `สแกนพอร์ต ${parts[3] || '?'} ที่ ${parts[2] || '?'} อยู่…`,
+      external:  `กำลังสแกน ${parts[2] || '?'} อยู่นะ รอซักครู่… / Scanning ${parts[2] || '?'}…`,
     }[netKind] || 'กำลังสแกนให้ รอแป๊บนะ…';
     this.panel.stream(loadingMsg, { done: false });
     if (isCaptureLike) this.panel.setActions([{ id: 'stop', label: 'หยุด' }], () => this.host.netCancel());
@@ -1364,7 +1456,8 @@ export class Chat {
       const view = await this.netAnalysis(res.text);
       this.netNote = view || '';
       if (view) {
-        const full = `${line}\n\n${view}`;
+        const src = (this.netSources || []).map((s) => `[${s.id}] ${s.title}\n    ${s.url}`).join('\n');
+        const full = `${line}\n\n${view}${src ? `\n\nแหล่งอ้างอิง:\n${src}` : ''}`;
         this.panel.stream(full, { done: true });
         this.history.pop(); // the plain line made above: the same one, with her reading of it
         this.rememberPrivate({ role: 'assistant', content: full });
@@ -1507,8 +1600,10 @@ export class Chat {
     const prompt = '(Note for you, never repeat it: the user asked you to scan THEIR OWN PC or home network and this is the real result. '
       + 'Comment on it as Capri in 2 or 3 short sentences, in the user\'s language, plain text. Say only what the data shows, never invent a port, a device or a threat; '
       + 'if something looks risky, say calmly what to check; if nothing does, say so.)\n\n' + text;
+    this.netSources = [];
     const res = await this.host.netAnalyze({ persona: this.persona(''), text: prompt }).catch(() => null);
     if (!res?.ok) return '';
+    this.netSources = Array.isArray(res.sources) ? res.sources : []; // references main.js checked: only these may be shown
     const out = stopLoop(polish(clean(res.text), '', this.brain.custom?.userName)).trim();
     return out.length < 4 || out.length > 600 || LEAK.test(out) ? '' : out;
   }
@@ -1548,7 +1643,7 @@ export class Chat {
     if (!res?.ok) {
       const why = {
         busy: 'ฉันยังสแกนอีกงานอยู่ รอให้เสร็จก่อนนะ',
-        target: 'ฉันสแกนได้เฉพาะเครื่องคุณเองกับ IP ส่วนตัวในวง LAN (192.168.x.x, 10.x.x.x, 172.16-31.x.x) ส่วนข้างนอกไม่แตะนะ',
+        target: 'IP หรือ domain ที่ระบุดูไม่ถูกต้องหรือไม่รองรับ — ใส่ IP หรือชื่อโดเมนที่ถูกต้อง เช่น sru.ac.th หรือ 203.150.1.1',
         nolan: 'ไม่เห็นวง LAN เลย ต่อ Wi-Fi หรือสายแลนอยู่รึเปล่า?',
         nopackets: 'ฟังแล้วไม่ได้แพ็กเก็ตเลย อาจเลือกการ์ดเครือข่ายผิด (ตั้ง netIface ใน config.json) หรือ Npcap ยังไม่ได้ติดตั้ง',
         nointerface: 'หาการ์ดเครือข่ายสำหรับจับแพ็กเก็ตไม่เจอ ลองติดตั้ง Npcap ใหม่',
@@ -1605,6 +1700,24 @@ export class Chat {
     }
     if (n.kind === 'ports') {
       return { line: n.ports.length ? `${n.ip} เปิดอยู่ ${n.ports.length} พอร์ตในช่วง ${n.range} ดูรายละเอียดด้านล่างได้` : `ไม่พบพอร์ตเปิดในช่วง ${n.range} ที่ ${n.ip}`, face: 'smug' };
+    }
+    if (n.kind === 'external') {
+      const risky = (n.riskyPorts || []);
+      const issues = (n.configIssues || []).length;
+      const remed = (n.remediations || []).length;
+      if (!n.ports.length) {
+        return { line: `สแกน ${n.host} แล้ว — ไม่พบพอร์ตเปิดใน top-200 ports\nNo open ports found in top-200 / Scanned ${n.host}`, face: 'smug' };
+      }
+      const flag = risky.length || issues ? 'wide' : 'smug';
+      const th = `สแกน ${n.host} แล้ว — พบ ${n.ports.length} พอร์ตเปิด`
+        + (risky.length ? ` ⚠ ${risky.length} พอร์ตเสี่ยง (${risky.join(', ')})` : ' ไม่พบพอร์ตเสี่ยงหลัก')
+        + (issues ? `, พบปัญหา config ${issues} ข้อ` : '')
+        + (remed ? ` — มีแนวทางแก้ไข ${remed} ข้อพร้อมแหล่งอ้างอิงในหน้าต่างด้านล่าง` : ' — ดูรายละเอียดด้านล่าง');
+      const en = `Scanned ${n.host} — ${n.ports.length} open port(s)`
+        + (risky.length ? ` ⚠ ${risky.length} risky (${risky.join(', ')})` : ', no major risky ports')
+        + (issues ? `, ${issues} config issue(s)` : '')
+        + (remed ? `. ${remed} remediation guide(s) with references below.` : '.');
+      return { line: `${th}\n${en}`, face: flag };
     }
     return { line: 'เสร็จแล้ว choom', face: 'smug' };
   }
