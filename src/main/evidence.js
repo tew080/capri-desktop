@@ -57,9 +57,23 @@ function buildPack(net) {
     .slice(0, MAX_FINDINGS);
 
   const failed = (net.ports || []).reduce((n, p) => n + (p.scriptErrors || 0), 0);
+  const analysis = net.analysis || null;
   const lines = [
-    `SCAN kind=${net.kind} target=${net.local ? 'this-pc' : 'other-host'} ports-open=${(net.ports || []).length} findings=${real.length} script-checks-failed=${failed}`,
+    `SCAN kind=${net.kind} target=${net.local ? 'this-pc' : 'other-host'} ports-open=${(net.ports || []).length} findings=${real.length} script-checks-failed=${failed}`
+      + (analysis ? ` risk=${analysis.score}/100 grade=${analysis.grade}` : ''),
   ];
+  if (analysis?.surface?.length) lines.push(`SURFACE ${analysis.surface.join(',')}`);
+  if (analysis?.correlations?.length) {
+    lines.push('CORRELATIONS (prefer these over isolated ports when summarizing)');
+    analysis.correlations.forEach((c, i) => {
+      lines.push(`  [C${i + 1}] severity=${c.severity} ${c.title}`);
+      lines.push(`    why: ${c.why}`);
+    });
+  }
+  if (analysis?.priorities?.length) {
+    lines.push('PRIORITY');
+    analysis.priorities.forEach((p, i) => lines.push(`  ${i + 1}. ${p}`));
+  }
   real.forEach((f, i) => {
     const rem = remByPort.get(f.port);
     const ids = [
@@ -91,7 +105,8 @@ const RULES = [
   '3) ข้อความ intel เป็นข้อมูลทั่วไปของบริการประเภทนั้น ไม่ได้แปลว่าเครื่องนี้มีช่องโหว่เหล่านั้น ต้องพูดให้ตรงตามนี้',
   '4) ถ้าข้อสรุปข้อไหนไม่มี [R#] รองรับ ให้บอกว่า "ยังไม่มีแหล่งอ้างอิงยืนยัน"',
   '5) ถ้า script-checks-failed มากกว่า 0 แปลว่าการตรวจบางส่วนไม่ได้ทำงาน ห้ามสรุปว่าปลอดภัย ให้บอกว่าผลยังไม่ครบ',
-  '6) ตอบ 2-3 ประโยคสั้น ๆ ข้อความธรรมดา ภาษาเดียวกับผู้ใช้ พูดเรื่องที่รุนแรงที่สุดก่อน บอกสิ่งที่ควรเช็กเป็นภาษาคน ห้ามเขียนคำสั่งที่แก้ระบบให้รัน',
+  '6) ถ้ามี CORRELATIONS ให้พูดภาพรวมจากนั้นก่อน แล้วค่อยแตะพอร์ตรายตัวที่รุนแรงที่สุด',
+  '7) ตอบ 2-3 ประโยคสั้น ๆ ข้อความธรรมดา ภาษาเดียวกับผู้ใช้ พูดเรื่องที่รุนแรงที่สุดก่อน บอกสิ่งที่ควรเช็กเป็นภาษาคน ห้ามเขียนคำสั่งที่แก้ระบบให้รัน',
 ].join('\n');
 
 /** what the model wrote → what the person sees. Removes links / CVE ids / [R#] that are not in the pack. */

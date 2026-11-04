@@ -5,6 +5,7 @@
 // Fixes are NEVER written by a model: they come from this fixed catalog and are run only by remediate.js's whitelist.
 
 const { usage, isAny, isLoop } = require('./listeners');
+const { correlate } = require('./correlate');
 
 // port → what it is / why it matters. block: Windows Firewall inbound rule may be offered. key: CISA KEV topic (intel.js)
 const CATALOG = {
@@ -119,11 +120,13 @@ function portFinding(p, ctx) {
 
 function configFindings(ports) {
   const out = [];
-  // ssl-cert prints "Not valid after: 2025-10-09T07:49:14": the same certificate is often on many ports, so one finding
   const expired = [];
+  let hestiaPorts = [];
   for (const p of ports) {
-    const m = /Not valid after:\s*(\d{4}-\d{2}-\d{2})/.exec(p.scriptOut || '');
+    const s = p.scriptOut || '';
+    const m = /Not valid after:\s*(\d{4}-\d{2}-\d{2})/.exec(s);
     if (m && Date.parse(m[1]) < Date.now()) expired.push({ port: p.port, date: m[1] });
+    if (/Hestia Control Panel/i.test(s)) hestiaPorts.push(p.port);
   }
   if (expired.length) {
     const list = expired.map((e) => e.port).join(', ');
@@ -137,6 +140,18 @@ function configFindings(ports) {
       refs: [{ title: 'Let’s Encrypt — เอกสารการออกและต่ออายุใบรับรอง', url: 'https://letsencrypt.org/docs/', source: 'Let’s Encrypt' }],
     });
   }
+  if (hestiaPorts.length) {
+    const list = [...new Set(hestiaPorts)].join(', ');
+    out.push({
+      id: 'hestia-cert', kind: 'config', port: hestiaPorts[0], exposure: 'lan', severity: 'low',
+      title: `พบร่องรอย Hestia Control Panel ในใบรับรอง (พอร์ต ${list})`,
+      what: 'แผงควบคุม Hestia (จาก organizationName ในใบรับรอง)',
+      why: 'เซิร์ฟเวอร์ที่ใช้ Hestia ควรจำกัดพอร์ตแผงควบคุมและ SSH ให้เฉพาะผู้ดูแล และตรวจว่าไม่ได้เปิดแผงโล่งสู่อินเทอร์เน็ต',
+      doing: [`ssl-cert ระบุ organizationName=Hestia Control Panel บนพอร์ต ${list}`],
+      usedBy: { text: 'ตรวจจากภายนอก จึงไม่ทราบว่าใครต่ออยู่', remotes: [], local: 0 }, fixes: [],
+      manual: 'จำกัด IP ที่เข้าแผง Hestia / ใช้ VPN และอัปเดตแผงให้เป็นเวอร์ชันล่าสุด',
+    });
+  }
   for (const p of ports) {
     const s = p.scriptOut || '';
     if (!s) continue;
@@ -145,6 +160,31 @@ function configFindings(ports) {
     if (/anon.*allowed|Anonymous.*OK/i.test(s)) out.push({ ...base, id: `ftpanon-${p.port}`, severity: 'high', title: `พอร์ต ${p.port} (FTP): เข้าได้โดยไม่ต้องมีบัญชี (anonymous)`, what: 'FTP แบบไม่ต้องล็อกอิน', why: 'ใครก็เข้ามาอ่าน/เขียนไฟล์ได้', manual: 'ปิด anonymous login ในตั้งค่าเซิร์ฟเวอร์ FTP' });
     if (/message signing.*(disabled|not required)|signing.*not required/i.test(s)) out.push({ ...base, id: `smbsign-${p.port}`, severity: 'medium', title: `พอร์ต ${p.port} (SMB): ไม่บังคับ message signing`, what: 'SMB ไม่บังคับลายเซ็นข้อความ', why: 'เสี่ยงโดนโจมตีแบบ relay ในวง LAN', manual: 'เปิด "Digitally sign communications (always)" ใน Local Security Policy' });
     if (/empty password|no password/i.test(s)) out.push({ ...base, id: `nopass-${p.port}`, severity: 'high', title: `พอร์ต ${p.port}: บริการนี้ไม่มีรหัสผ่าน`, what: 'บริการไม่ตั้งรหัสผ่าน', why: 'ใครต่อเข้ามาได้ก็ใช้ได้เลย', manual: 'ตั้งรหัสผ่านให้บริการนั้นทันที' });
+    const blocked = /Host '([^']+)' is blocked because of many connection errors/i.exec(s);
+    if (blocked && (p.port === 3306 || /mysql|mariadb/i.test(p.service || p.product || ''))) {
+      out.push({
+        ...base,
+        id: `mysql-blocked-${p.port}`,
+        severity: 'high',
+        title: `พอร์ต ${p.port} (MySQL/MariaDB): เปิดสู่ภายนอกและมี host ถูก block จาก connection errors`,
+        what: 'ฐานข้อมูลตอบจากภายนอก พร้อมข้อความ block host',
+        why: `เซิร์ฟเวอร์ตอบว่า host '${blocked[1]}' ถูก block เพราะ connection errors ซ้ำ — แปลว่าพอร์ตฐานข้อมูลรับคอนเนกชันจากเน็ตกว้าง และมีการยิง/สแกนเข้ามาจริง`,
+        doing: [...base.doing, `ข้อความจากเซิร์ฟเวอร์: Host '${blocked[1]}' is blocked because of many connection errors`],
+        manual: 'bind ฐานข้อมูลที่ 127.0.0.1 (หรือ private IP), ปิดพอร์ต 3306 จากภายนอกด้วย firewall',
+      });
+    }
+    if (/wp-admin|WordPress/i.test(s) && (p.port === 80 || p.port === 443 || /http/i.test(p.service || ''))) {
+      out.push({
+        ...base,
+        id: `wp-hint-${p.port}`,
+        severity: 'low',
+        title: `พอร์ต ${p.port}: พบร่องรอย WordPress /wp-admin`,
+        what: 'เว็บที่มีเส้นทางหรือแบนเนอร์ของ WordPress',
+        why: 'แผง /wp-admin/ ที่เปิดโล่งมักถูก brute-force — ควรบังคับ HTTPS, จำกัด IP หรือใช้ 2FA',
+        doing: [...base.doing, 'script output อ้างถึง WordPress หรือ /wp-admin/'],
+        manual: 'จำกัด /wp-admin/, บังคับ HTTPS, อัปเดต CMS และปลั๊กอิน',
+      });
+    }
   }
   return out;
 }
@@ -192,14 +232,20 @@ function buildFindings(ctx) {
   }
   list.push(...configFindings(ctx.ports || []));
   if (ctx.local) list.push(...firewallFindings(ctx.snap));
-  return list.sort((a, b) => (RANK[a.severity] - RANK[b.severity]) || ((a.port || 0) - (b.port || 0)));
+  list.sort((a, b) => (RANK[a.severity] - RANK[b.severity]) || ((a.port || 0) - (b.port || 0)));
+
+  const analysis = correlate(list, ctx.ports || [], { local: Boolean(ctx.local) });
+  list.analysis = analysis;
+  return list;
 }
 
-// the lines of the status card (terminal style), full detail
-function renderLines(findings) {
+function renderLines(findings, analysis) {
   const real = findings.filter((f) => f.severity !== 'info');
   const info = findings.filter((f) => f.severity === 'info');
   const lines = [];
+  const a = analysis || findings.analysis || null;
+  if (a?.summaryLines?.length) lines.push(...a.summaryLines);
+
   if (real.length) {
     lines.push('FINDINGS');
     real.forEach((f, i) => {
@@ -222,4 +268,4 @@ function renderLines(findings) {
   return lines;
 }
 
-module.exports = { buildFindings, renderLines, CATALOG, BLOCKABLE, SEV_TH };
+module.exports = { buildFindings, renderLines, CATALOG, BLOCKABLE, SEV_TH, correlate };

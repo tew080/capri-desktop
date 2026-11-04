@@ -904,7 +904,7 @@ const doneEl = document.getElementById('done');
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 function colorizeLine(l) {
   const e = l.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-  if (/^(RAM|CPU|GPU|DISK|TOP RAM|TOP CPU|UPTIME|OS|BRAIN|NMAP (?:SELF|LAN|HOST|GATEWAY|OS|VULN|PORTS)|TSHARK(?: [A-Z]+)?|PORTS|FINDINGS|SOURCE|EXPOSED|DEVICES|PROTO|DOMAINS|TALKERS|NOTES)\\b/.test(l)) return '<div class="sec">' + e + '</div>';
+  if (/^(RAM|CPU|GPU|DISK|TOP RAM|TOP CPU|UPTIME|OS|BRAIN|NMAP (?:SELF|LAN|HOST|GATEWAY|OS|VULN|PORTS)|TSHARK(?: [A-Z]+)?|PORTS|FINDINGS|SOURCE|EXPOSED|DEVICES|PROTO|DOMAINS|TALKERS|NOTES|SUMMARY|CORRELATIONS|PRIORITY|RISK ASSESSMENT)\\b/.test(l)) return '<div class="sec">' + e + '</div>';
   if (/^\\s+\\d+\\./.test(l) || /\\[#|\\[-/.test(l) || /\\]\\s*\\d+%/.test(l)) {
     const colored = e.replace(/(#+)/g,'<span class="bar">$1</span>').replace(/(-{2,})/g,'<span class="dim">$1</span>').replace(/(\\d+(?:\\.\\d+)?\\s*(?:MB|GB|s|%))/g,'<span class="num">$1</span>');
     return '<div class="line">' + colored + '</div>';
@@ -929,7 +929,7 @@ async function run() {
     const lines = DATA.lines || [];
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
-      const isSec = /^(RAM|CPU|GPU|DISK|TOP RAM|TOP CPU|UPTIME|OS|BRAIN|NMAP (?:SELF|LAN|HOST|GATEWAY|OS|VULN|PORTS)|TSHARK(?: [A-Z]+)?|PORTS|FINDINGS|SOURCE|EXPOSED|DEVICES|PROTO|DOMAINS|TALKERS|NOTES)\\b/.test(line);
+      const isSec = /^(RAM|CPU|GPU|DISK|TOP RAM|TOP CPU|UPTIME|OS|BRAIN|NMAP (?:SELF|LAN|HOST|GATEWAY|OS|VULN|PORTS)|TSHARK(?: [A-Z]+)?|PORTS|FINDINGS|SOURCE|EXPOSED|DEVICES|PROTO|DOMAINS|TALKERS|NOTES|SUMMARY|CORRELATIONS|PRIORITY|RISK ASSESSMENT)\\b/.test(line);
       if (isSec && i > 0) await sleep(90);
       const wrap = document.createElement('div');
       wrap.className = 'line';

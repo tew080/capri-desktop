@@ -507,7 +507,7 @@ function scanVuln(target) {
     lines.push(...renderLines(findings));
     if (!real.length && ports.length) lines.push('  ไม่พบปัญหาที่ชัดเจน (แต่นี่ไม่ใช่ pentest จริงจัง นะ)');
     if (intel.used) lines.push('SOURCE', `  CISA Known Exploited Vulnerabilities (ดึงเมื่อ ${String(intel.fetched || '').slice(0, 10)}) — โหลดรายการสาธารณะมาเทียบในเครื่อง ไม่ได้ส่งข้อมูลของเครื่องนี้ออกไป`);
-    const data = { net: { kind: 'vuln', ip, local, ports, findings, firewall: snap?.firewall || [], intel } };
+    const data = { net: { kind: 'vuln', ip, local, ports, findings, analysis: findings.analysis || null, firewall: snap?.firewall || [], intel } };
     last = { at: Date.now(), net: data.net };
     return { ok: true, view: 'net', data, text: lines.join('\n') };
   });
@@ -904,6 +904,7 @@ function scanExternal(target, { stealth = false, aggressive = true, mask = true 
         stealth,
         aggressive,
         findings,
+        analysis: findings.analysis || null,
         intel,
         os: {
           matches: nmapHost?.osmatches || [],
