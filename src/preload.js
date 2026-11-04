@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld('host', {
   onWindows: on('windows:update'),
   setInteractive: (on) => ipcRenderer.send('overlay:interactive', Boolean(on)),
   rearm: () => ipcRenderer.send('overlay:rearm'),
+  rebuildOverlay: () => ipcRenderer.send('overlay:rebuild'),
   cursor: () => ipcRenderer.invoke('overlay:cursor'),
   screens: () => ipcRenderer.invoke('screens:list'),
   moveScreen: (id) => ipcRenderer.invoke('screens:move', id),

@@ -692,6 +692,24 @@ async function boot() {
     try { extras?.setDemoMode?.(false); } catch { /* */ }
   };
 
+  // A left release with no press before it, twice in a row: her window lost its input at the OS level
+  // (after sleep, say). main.js makes the window again (it keeps its own 10 s pause between rebuilds).
+  {
+    // A screen waking from sleep sends no 'resume' (only the system sleeping does), so this is what
+    // catches it: the first click that comes up without a press. Not counted when the last move had
+    // a button held (a drag that began in another app and ended on her).
+    let downSeen = false;
+    let lastMoveBs = 0;
+    window.addEventListener('mousemove', (e) => { lastMoveBs = e.buttons; }, true);
+    window.addEventListener('mousedown', (e) => { if (e.button === 0) downSeen = true; }, true);
+    window.addEventListener('mouseup', (e) => {
+      if (e.button !== 0) return;
+      const orphan = !downSeen && lastMoveBs === 0;
+      downSeen = false;
+      if (orphan) host.rebuildOverlay?.();
+    }, true);
+  }
+
   // what's in here, for --dev scripts (debug route `eval`)
   window.dev = { pointer: () => ({
     interactive, pressed, mouse, hit: mouse ? capri.hit(mouse.x, mouse.y) : null, busy: capri.busy, dragging: capri.dragging,

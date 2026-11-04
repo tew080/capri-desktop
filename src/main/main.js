@@ -191,6 +191,45 @@ function rearmOverlay() {
   console.log('[capri] mouse hook set up again');
 }
 
+// The window watcher, started for the current overlay (again after the overlay is rebuilt).
+function beginWindowWatch() {
+  windowWatch = startWindowWatch({
+    overlay,
+    ignore: () => [], // no window of ours to leave out anymore (the menu is drawn inside her overlay)
+    onUpdate: (data) => {
+      // a click on the taskbar brings it up over her: sitting on it, her legs would vanish behind it
+      if (data.taskbar && !lastWindows?.taskbar && config.load().rest === 'taskbar') raiseOverlay();
+      lastWindows = data;
+      overlay?.webContents.send('windows:update', data);
+    },
+  });
+}
+
+// Her input went bad at the window level (after sleep, an unlock, or a menu): a rearm only flips
+// the click-through flag and doesn't undo that, so the window is thrown away and made again.
+let rebuilding = false;
+let lastRebuild = 0;
+function rebuildOverlay(reason, { force = false } = {}) {
+  if (rebuilding || !overlay || overlay.isDestroyed()) return;
+  if (!force && Date.now() - lastRebuild < 10000) return; // not in a loop
+  rebuilding = true;
+  lastRebuild = Date.now();
+  console.warn('[capri] overlay rebuilt:', reason);
+  try {
+    windowWatch?.stop();
+    const old = overlay;
+    overlay = null;
+    old.destroy();
+    overlayIgnore = true;
+    createOverlay();
+    beginWindowWatch();
+    overlay.webContents.once('did-finish-load', () => setTimeout(rearmOverlay, 600));
+  } catch (err) {
+    console.error('[capri] rebuild failed:', err);
+  }
+  setTimeout(() => { rebuilding = false; }, 5000);
+}
+
 // Back on top of everything, the taskbar included (it comes up over her when it's clicked). Twice:
 // the taskbar can come up again a moment later, as its menus and previews open.
 function raiseOverlay() {
@@ -1087,6 +1126,7 @@ function registerIpc() {
     overlay?.setIgnoreMouseEvents(!on, { forward: true });
   });
   ipcMain.on('overlay:rearm', () => rearmOverlay()); // the pointer moved over her and she never heard of it
+  ipcMain.on('overlay:rebuild', () => rebuildOverlay('mouseup without mousedown')); // her page saw it
   ipcMain.handle('overlay:cursor', () => {
     const p = screen.getCursorScreenPoint();
     const b = overlay.getBounds();
@@ -1650,16 +1690,7 @@ function main() {
     registerIpc();
     createOverlay();
     createTray();
-    windowWatch = startWindowWatch({
-      overlay,
-      ignore: () => [], // no window of ours to leave out anymore (the menu is drawn inside her overlay)
-      onUpdate: (data) => {
-        // a click on the taskbar brings it up over her: sitting on it, her legs would vanish behind it
-        if (data.taskbar && !lastWindows?.taskbar && config.load().rest === 'taskbar') raiseOverlay();
-        lastWindows = data;
-        overlay?.webContents.send('windows:update', data);
-      },
-    });
+    beginWindowWatch();
     createBridge({
       port: PORT,
       // her own Claude Code chat's hooks would cover its answer with theirs
@@ -1688,11 +1719,11 @@ function main() {
     screen.on('display-added', screensChanged);
     screen.on('display-removed', screensChanged);
     // after sleep or a locked screen, once Windows has settled
-    powerMonitor.on('resume', () => setTimeout(rearmOverlay, 2000));
+    powerMonitor.on('resume', () => setTimeout(() => rebuildOverlay('resume', { force: true }), 400));
     powerMonitor.on('lock-screen', () => { screenLocked = true; });
     powerMonitor.on('unlock-screen', () => {
       screenLocked = false;
-      setTimeout(rearmOverlay, 1000);
+      setTimeout(() => rebuildOverlay('unlock'), 300);
     });
   });
 
