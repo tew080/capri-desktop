@@ -1,0 +1,76 @@
+/* Her themed menu, inside the overlay (js/menu.js). Same look as the old menu window. */
+.cm {
+  --cm-bg: #1a1226;
+  --cm-fg: #f3eefc;
+  --cm-muted: #a89bb8;
+  --cm-line: rgba(255, 255, 255, 0.08);
+  --cm-hover: rgba(255, 255, 255, 0.08);
+  --cm-accent: #c084fc;
+  --cm-cyan: #67e8f9;
+  --cm-check: #e879f9;
+  position: fixed;
+  inset: 0;
+  z-index: 100000;
+  color: var(--cm-fg);
+  font: 13.5px/1.4 "Segoe UI", "Sarabun", "Leelawadee UI", system-ui, sans-serif;
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: default;
+}
+.cm[hidden] { display: none; }
+.cm__stage {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(8, 4, 16, 0.25);
+}
+.cm__panel {
+  background: var(--cm-bg);
+  border: 1px solid var(--cm-line);
+  border-radius: 12px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
+  min-width: 268px;
+  max-width: 360px;
+  max-height: 86vh;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 4px 0 6px;
+}
+.cm__panel--root { position: relative; z-index: 10; }
+.cm__panel--fly { position: fixed; display: none; z-index: 50; }
+.cm__panel--fly.is-shown { display: block; }
+.cm__panel::-webkit-scrollbar { width: 6px; }
+.cm__panel::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.15); border-radius: 4px; }
+.cm__hdr {
+  padding: 10px 16px 8px;
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--cm-cyan);
+  border-bottom: 1px solid var(--cm-line);
+  margin-bottom: 2px;
+  font-weight: 600;
+}
+.cm__item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  cursor: pointer;
+  color: var(--cm-fg);
+  background: transparent;
+  position: relative;
+  white-space: nowrap;
+}
+.cm__item:hover:not(.is-disabled),
+.cm__item.is-open { background: var(--cm-hover); }
+.cm__item.is-disabled { opacity: 0.45; cursor: default; color: var(--cm-muted); }
+.cm__item.is-on .cm__lab { font-weight: 500; }
+.cm__mark { width: 16px; flex: 0 0 16px; text-align: center; font-size: 13px; color: var(--cm-check); }
+.cm__mark--arrow { color: var(--cm-muted); font-weight: 700; }
+.cm__item:hover .cm__mark--arrow,
+.cm__item.is-open .cm__mark--arrow { color: var(--cm-accent); }
+.cm__lab { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.cm__sep { height: 1px; margin: 5px 12px; background: var(--cm-line); }

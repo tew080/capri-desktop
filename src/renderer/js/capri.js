@@ -14,6 +14,7 @@ import { sleep, rand, pick, clamp, lerp, ease, tween, reducedMotion, today } fro
 const ON_TWOS = 1000 / 12;
 const ON_ONES = 1000 / 24;
 const ASLEEP = 1000 / 6;
+const BUSY_MAX_MS = 12000; // no move of hers takes this long: busy past it is stuck
 const SLEEP_AFTER = 10 * 60 * 1000;
 const DOZE_AFTER = 20 * 1000; // asleep this long, she comes apart down to her mask
 const GRAVITY = 2600; // px/s²
@@ -54,7 +55,8 @@ export class Capri {
     this.perch = null;    // { id, dx }: the window she sits on, and where along it
     this.peekSide = null; // left | right | top
     this.windows = { fg: 0, wins: [] };
-    this.busy = false;
+    this._busy = false;
+    this.busySince = 0;
     this.hidden = false;
     this.stowed = false;  // folded away in her biochip (Ctrl+Alt+C)
     this.dormant = false; // asleep, down to her mask
@@ -433,6 +435,16 @@ export class Capri {
     return front || options[0] || null;
   }
 
+  // `busy` remembers since when it has been set: an async move that throws half way (a window gone,
+  // a lost GL context...) never reaches its `busy = false`, and a busy that stays on makes the
+  // left click do nothing (mousedown returns early) while the right click, which doesn't look at
+  // it, still works. The loop below puts her back on her feet when one is stuck.
+  get busy() { return this._busy; }
+  set busy(v) {
+    this._busy = Boolean(v);
+    this.busySince = v ? performance.now() : 0;
+  }
+
   // ---------- frame loop ----------
 
   interval() {
@@ -441,9 +453,22 @@ export class Capri {
   }
 
   loop(now) {
+    // Idle she draws 12 times a second (6 asleep, 0 hidden): wake up for the frame that is due
+    // instead of 60 times a second to find nothing to do (CPU and GPU wake-ups, for nothing).
+    const wait = this.hidden ? 120 : this.interval() - 1 - (now - this.lastDraw);
+    if (wait > 6) {
+      setTimeout(() => requestAnimationFrame(this.loop), wait - 4);
+      return;
+    }
     requestAnimationFrame(this.loop);
-    if (this.hidden) return;
-    if (now - this.lastDraw < this.interval() - 1) return;
+    // a move that died half way: busy for far longer than any of hers lasts, nobody holding her
+    if (this._busy && !this.dragging && now - this.busySince > BUSY_MAX_MS) {
+      console.warn('[capri] busy was stuck, reset');
+      this.busy = false;
+      this.stowing = false;
+      this.pending = null;
+      this.onTeleport?.('end');
+    }
     this.drawFrame(now);
     this.behave(now);
   }
@@ -1748,12 +1773,32 @@ export class Capri {
 
   bindPointer() {
     let down = null;
+    // main.js re-arms the overlay (waking from sleep, a lost mouse hook): drop a press whose release never reached her
+    this.resetPointer = () => {
+      down = null;
+      if (!this.dragging) return;
+      this.dragging = false;
+      this.setStance('stand');
+      this.onTeleport?.('end');
+      this.drop();
+    };
     this.canvas.addEventListener('contextmenu', (e) => {
       e.preventDefault();
+      // right-click still works when busy is stuck (mousedown bails early). Clear a stuck busy
+      // so the next left-click / drag works after the menu closes.
+      if (this._busy && !this.dragging) {
+        this.busy = false;
+        this.stowing = false;
+        this.pending = null;
+        this.onTeleport?.('end');
+      }
       if (this.hit(e.clientX, e.clientY)) this.onMenu?.(); // right-click: her menu
     });
-    this.canvas.addEventListener('mousedown', (e) => {
+    // On the window, in the capture phase: she is hit-tested by her own alpha map (hit), so a press on her counts
+    // whatever element of the overlay (a layer of effects, the ticker) happens to be the event's target.
+    window.addEventListener('mousedown', (e) => {
       if (e.button !== 0 || !this.hit(e.clientX, e.clientY)) return;
+      if (e.target?.closest?.('#panel, #ticker, #chip, #cmenu, button, input, textarea, select, a')) return; // her panel's own controls
       // thrown: you can catch her on the fly, or pick her up off the floor
       const thrown = this.stance === 'fly' || this.stance === 'down';
       if (this.busy && !thrown) return;
@@ -1764,9 +1809,12 @@ export class Capri {
       down = { x: e.clientX, y: e.clientY, pos: { ...this.pos }, at: this.spritePoint(e.clientX, e.clientY) };
       this.track = [{ x: e.clientX, y: e.clientY, t: performance.now() }];
       if (thrown) this.pickUp(down);
-    });
+    }, true);
     window.addEventListener('mousemove', (e) => {
       this.mouse = { x: e.clientX, y: e.clientY }; // a window she's in watches it
+      // no button held anymore, but the release never reached her (the window was click-through for
+      // a moment): drop it, or the next move would pick her up with nothing pressed
+      if (down && e.buttons === 0 && !this.dragging) down = null;
       if (down) {
         const now = performance.now();
         this.track.push({ x: e.clientX, y: e.clientY, t: now });

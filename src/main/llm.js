@@ -183,6 +183,9 @@ function claudeChat(cfg, text, persona, onDelta, signal) {
       }
     });
     child.stderr.on('data', (chunk) => { errors += chunk; });
+    // Claude Code quitting before it read the prompt is an EPIPE here: an unhandled 'error' event on a
+    // stream kills the app, the 'close' below already says what went wrong
+    child.stdin.on('error', () => {});
     child.stdin.end(text);
     child.on('error', reject);
     child.on('close', () => {

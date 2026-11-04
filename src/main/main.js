@@ -53,11 +53,12 @@ protocol.registerSchemesAsPrivileged([
 let overlay = null;
 let tray = null;
 let trayMenu = null; // native menu for the system tray icon
-let menuWin = null;  // themed Capri menu (centered) for right-click on her
-let menuActions = new Map(); // id -> click handler for themed menu
+let overlayIgnore = true; // what main last asked of her window: true = click-through (for pointer-debug.log)
+let menuActions = new Map(); // id -> click handler of her themed menu, rebuilt each time it opens (menu:items)
 
 let demoTimer = null;
 let windowWatch = null;
+let rendererCrashes = []; // times (ms) the overlay's renderer died, recent ones
 let screenLocked = false; // no chaos on a locked screen (mischief.js)
 // the watcher only speaks when something changes: the overlay asks for this when it (re)loads
 let lastWindows = null;
@@ -183,6 +184,7 @@ function rearmOverlay() {
   if (!overlay || overlay.isDestroyed()) return;
   overlay.setIgnoreMouseEvents(false);
   overlay.setIgnoreMouseEvents(true, { forward: true });
+  overlayIgnore = true;
   overlay.setAlwaysOnTop(true, 'screen-saver');
   fitOverlay();
   sendCommand('rearmed'); // click-through again: she waits for the pointer to be on her
@@ -237,9 +239,21 @@ function createOverlay() {
     fitOverlay();
     overlay.showInactive();
   });
+  // The renderer dying (out of memory, a GPU reset) used to leave an empty overlay and the tray, no
+  // her. Loaded again; if it keeps dying (3 times in 2 minutes) it stays down instead of looping.
   overlay.webContents.on('render-process-gone', (_e, details) => {
     console.error('[capri] renderer gone:', details.reason);
+    if (details.reason === 'clean-exit' || details.reason === 'killed') return;
+    const now = Date.now();
+    rendererCrashes = rendererCrashes.filter((t) => now - t < 120000).concat(now);
+    if (rendererCrashes.length > 3) return;
+    setTimeout(() => {
+      if (!overlay || overlay.isDestroyed()) return;
+      overlay.webContents.reloadIgnoringCache();
+      setTimeout(rearmOverlay, 1500);
+    }, 1000);
   });
+  overlay.webContents.on('unresponsive', () => console.warn('[capri] renderer unresponsive'));
   if (DEV) {
     overlay.webContents.on('console-message', (e) => {
       const { level, message, lineNumber, sourceId } = e;
@@ -768,14 +782,12 @@ function rebuildTray() {
   ]);
   tray.setContextMenu(menu);
   trayMenu = menu;
-  // keep action map in sync for the themed popup (right-click on her)
-  menuActions = collectMenuActions(menu).actions;
 }
 
-// Flatten Electron Menu into {items, actions} the themed HTML window can render
+// Flatten an Electron Menu into {items, actions}: the items her themed menu draws (renderer/js/menu.js),
+// and what to run for each id
 function collectMenuActions(menu) {
   const actions = new Map();
-  let seq = 0;
   const walk = (m, path = []) => {
     if (!m) return [];
     return m.items.map((item, i) => {
@@ -799,309 +811,41 @@ function collectMenuActions(menu) {
   return { items, actions };
 }
 
-function themedMenuHtml(items) {
-  const esc = (s) => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-  // Flatten tree to panels keyed by parent id; root panel id = "root"
-  const panels = [];
-  const walk = (list, parentId) => {
-    const rows = [];
-    for (const it of list || []) {
-      if (it.visible === false) continue;
-      if (it.type === 'separator') {
-        rows.push({ sep: true });
-        continue;
-      }
-      const has = !!(it.children && it.children.length);
-      rows.push({
-        id: it.id,
-        label: it.label || '',
-        enabled: it.enabled !== false,
-        checked: !!it.checked,
-        checkable: it.type === 'checkbox' || it.type === 'radio',
-        hasSub: has,
-      });
-      if (has) walk(it.children, it.id);
+// Why can't she be clicked? One line of state, to the console and to <userData>/pointer-debug.log:
+// what main asked of her window, where the pointer is, and what her page thinks (window.dev.pointer, app.js).
+// Written on Ctrl+Alt+D (press it while the pointer is on her and the click fails).
+async function pointerDiag(tag) {
+  try {
+    if (!overlay || overlay.isDestroyed()) return;
+    const cursor = screen.getCursorScreenPoint();
+    const b = overlay.getBounds();
+    let page = null;
+    try {
+      page = await overlay.webContents.executeJavaScript('window.dev && window.dev.pointer ? window.dev.pointer() : null');
+    } catch (err) {
+      page = { error: err.message };
     }
-    panels.push({ id: parentId, rows });
-  };
-  walk(items, 'root');
-
-  const panelsJson = JSON.stringify(panels);
-  return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
-:root {
-  /* unified Capri panel — one base, one hover, no patchy fills */
-  --bg: #1a1226;
-  --bg2: #1a1226;
-  --fg: #f3eefc;
-  --muted: #a89bb8;
-  --line: rgba(255, 255, 255, 0.08);
-  --hover: rgba(255, 255, 255, 0.08);
-  --accent: #c084fc;
-  --cyan: #67e8f9;
-  --check: #e879f9;
-}
-* { box-sizing: border-box; }
-html, body {
-  margin: 0; padding: 0;
-  background: transparent;
-  color: var(--fg);
-  font: 13.5px/1.4 "Segoe UI", "Sarabun", "Leelawadee UI", system-ui, sans-serif;
-  overflow: hidden;
-  user-select: none;
-  -webkit-user-select: none;
-}
-html, body { width: 100%; height: 100%; }
-#stage {
-  position: fixed;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(8, 4, 16, 0.25);
-}
-.panel {
-  background: var(--bg);
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
-  min-width: 268px;
-  max-width: 360px;
-  max-height: 86vh;
-  overflow-y: auto;
-  overflow-x: hidden;
-  padding: 4px 0 6px;
-}
-.panel[data-id="root"] { position: relative; z-index: 10; }
-.panel:not([data-id="root"]) {
-  position: fixed;
-  display: none;
-  z-index: 50;
-  background: var(--bg2);
-}
-.panel:not([data-id="root"]).show { display: block; }
-.panel::-webkit-scrollbar { width: 6px; }
-.panel::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 4px; }
-.hdr {
-  padding: 10px 16px 8px;
-  font-size: 11px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--cyan);
-  border-bottom: 1px solid var(--line);
-  margin-bottom: 2px;
-  font-weight: 600;
-}
-.item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 16px;
-  cursor: pointer;
-  color: var(--fg);
-  background: transparent;
-  position: relative;
-  white-space: nowrap;
-}
-.item:hover:not(.disabled),
-.item.open {
-  background: var(--hover);
-  color: var(--fg);
-}
-.item.disabled {
-  opacity: 0.45;
-  cursor: default;
-  color: var(--muted);
-  background: transparent !important;
-}
-/* checked = accent mark only, never a different row fill */
-.item.on { background: transparent; }
-.item.on:hover:not(.disabled),
-.item.on.open { background: var(--hover); }
-.item.on .lab { color: var(--fg); font-weight: 500; }
-.mark {
-  width: 16px;
-  flex: 0 0 16px;
-  text-align: center;
-  font-size: 13px;
-  color: var(--check);
-}
-.mark.arrow { color: var(--muted); font-weight: 700; }
-.item:hover .mark.arrow,
-.item.open .mark.arrow { color: var(--accent); }
-.lab { flex: 1; overflow: hidden; text-overflow: ellipsis; }
-.sep {
-  height: 1px;
-  margin: 5px 12px;
-  background: var(--line);
-}
-</style></head><body>
-<div id="stage">
-  <div class="panel" data-id="root">
-    <div class="hdr">CAPRI · MENU</div>
-    <div id="root-rows"></div>
-  </div>
-</div>
-<script>
-const { ipcRenderer } = require('electron');
-const panels = ${panelsJson};
-const byId = Object.fromEntries(panels.map((p) => [p.id, p]));
-
-function esc(s) {
-  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}
-
-function rowHtml(row) {
-  if (row.sep) return '<div class="sep"></div>';
-  const dis = row.enabled ? '' : ' disabled';
-  const on = row.checked ? ' on' : '';
-  const mark = row.checkable ? (row.checked ? '✓' : '') : (row.hasSub ? '›' : '');
-  const markCls = row.checkable ? 'check' : (row.hasSub ? 'arrow' : '');
-  return '<div class="item' + dis + on + (row.hasSub ? ' has-sub' : '') + '" data-id="' + esc(row.id) + '" data-has-sub="' + (row.hasSub ? '1' : '0') + '">'
-    + '<span class="mark ' + markCls + '">' + mark + '</span>'
-    + '<span class="lab">' + esc(row.label) + '</span></div>';
-}
-
-function ensurePanel(id) {
-  let el = null;
-  document.querySelectorAll('.panel').forEach((p) => { if (p.getAttribute('data-id') === id) el = p; });
-  if (el) return el;
-  const data = byId[id];
-  if (!data) return null;
-  el = document.createElement('div');
-  el.className = 'panel';
-  el.setAttribute('data-id', id);
-  el.innerHTML = data.rows.map(rowHtml).join('');
-  document.getElementById('stage').appendChild(el);
-  bindItems(el);
-  return el;
-}
-
-function placePanel(anchorEl, panelEl) {
-  const r = anchorEl.getBoundingClientRect();
-  panelEl.classList.add('show');
-  const fw = panelEl.offsetWidth || 260;
-  const fh = panelEl.offsetHeight || 120;
-  let left = r.right + 6;
-  let top = r.top;
-  if (left + fw > window.innerWidth - 8) left = Math.max(8, r.left - fw - 6);
-  if (top + fh > window.innerHeight - 8) top = Math.max(8, window.innerHeight - fh - 8);
-  if (top < 8) top = 8;
-  panelEl.style.left = left + 'px';
-  panelEl.style.top = top + 'px';
-}
-
-function bindItems(scope) {
-  scope.querySelectorAll('.item').forEach((el) => {
-    el.addEventListener('mouseenter', () => {
-      if (el.classList.contains('disabled')) return;
-      const id = el.getAttribute('data-id');
-      const hasSub = el.getAttribute('data-has-sub') === '1';
-      const parentPanel = el.closest('.panel');
-      parentPanel.querySelectorAll(':scope > .item.open').forEach((o) => {
-        if (o !== el) o.classList.remove('open');
-      });
-      // hide flyouts that are not ancestors and not this id
-      document.querySelectorAll('.panel:not([data-id="root"]).show').forEach((p) => {
-        const pid = p.getAttribute('data-id');
-        if (pid === id) return;
-        if (id.startsWith(pid + '.')) return; // ancestor panel of current
-        if (pid.startsWith(id + '.')) return; // will replace deeper
-        // keep parent panel of this item
-        if (parentPanel && pid === parentPanel.getAttribute('data-id')) return;
-        p.classList.remove('show');
-      });
-      if (hasSub) {
-        el.classList.add('open');
-        const sub = ensurePanel(id);
-        if (sub) placePanel(el, sub);
-      }
+    const line = JSON.stringify({
+      t: new Date().toISOString(), tag, ignore: overlayIgnore,
+      overlay: { visible: overlay.isVisible(), focusable: overlay.isFocusable(), onTop: overlay.isAlwaysOnTop(), bounds: b },
+      cursor: { x: cursor.x - b.x, y: cursor.y - b.y }, page,
     });
-    el.addEventListener('click', (e) => {
-      e.stopPropagation();
-      if (el.classList.contains('disabled')) return;
-      if (el.getAttribute('data-has-sub') === '1') {
-        const id = el.getAttribute('data-id');
-        el.classList.add('open');
-        const sub = ensurePanel(id);
-        if (sub) placePanel(el, sub);
-        return;
-      }
-      ipcRenderer.send('menu:action', el.getAttribute('data-id'));
-    });
-  });
-}
-
-const root = byId['root'];
-document.getElementById('root-rows').innerHTML = (root ? root.rows : []).map(rowHtml).join('');
-bindItems(document.querySelector('.panel[data-id="root"]'));
-
-document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') ipcRenderer.send('menu:close');
-});
-
-// full-screen stage — no resize needed
-document.getElementById('stage').addEventListener('mousedown', (e) => {
-  if (e.target.id === 'stage') ipcRenderer.send('menu:close');
-});
-</script>
-</body></html>`;
-}
-
-function openThemedMenu() {
-  if (!trayMenu) return;
-  const pack = collectMenuActions(trayMenu);
-  menuActions = pack.actions;
-
-  const html = themedMenuHtml(pack.items);
-  const display = targetDisplay();
-  const wa = display.workArea;
-
-  if (menuWin && !menuWin.isDestroyed()) {
-    menuWin.close();
-    menuWin = null;
+    console.log('[capri] pointer', line);
+    const file = path.join(app.getPath('userData'), 'pointer-debug.log');
+    try {
+      if (fs.existsSync(file) && fs.statSync(file).size > 200000) fs.writeFileSync(file, '');
+    } catch {
+      // not worth failing over
+    }
+    fs.appendFileSync(file, `${line}\n`);
+    if (tag === 'hotkey') {
+      // easy to find: the line is on the clipboard (paste it into the chat) and the file is shown in Explorer
+      clipboard.writeText(line);
+      shell.showItemInFolder(file);
+    }
+  } catch (err) {
+    console.error('[capri] pointer diag failed:', err.message);
   }
-
-  // Full work-area glass: root panel centered; flyouts can open without clipping
-  menuWin = new BrowserWindow({
-    width: wa.width,
-    height: wa.height,
-    x: wa.x,
-    y: wa.y,
-    frame: false,
-    transparent: true,
-    resizable: false,
-    movable: false,
-    minimizable: false,
-    maximizable: false,
-    fullscreenable: false,
-    skipTaskbar: true,
-    alwaysOnTop: true,
-    show: false,
-    backgroundColor: '#00000000',
-    hasShadow: false,
-    webPreferences: {
-      nodeIntegration: true,
-      contextIsolation: false,
-    },
-  });
-  menuWin.setAlwaysOnTop(true, 'pop-up-menu');
-  menuWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
-  menuWin.once('ready-to-show', () => {
-    if (!menuWin || menuWin.isDestroyed()) return;
-    menuWin.show();
-    menuWin.focus();
-  });
-  menuWin.on('blur', () => {
-    setTimeout(() => {
-      if (menuWin && !menuWin.isDestroyed()) menuWin.close();
-    }, 150);
-  });
-  menuWin.on('closed', () => { menuWin = null; });
-}
-
-function closeThemedMenu() {
-  if (menuWin && !menuWin.isDestroyed()) menuWin.close();
-  menuWin = null;
 }
 
 // Run from a clone (`npm start`), electron.exe alone would open the default Electron app at login:
@@ -1339,6 +1083,7 @@ function createTray() {
 
 function registerIpc() {
   ipcMain.on('overlay:interactive', (_e, on) => {
+    overlayIgnore = !on;
     overlay?.setIgnoreMouseEvents(!on, { forward: true });
   });
   ipcMain.on('overlay:rearm', () => rearmOverlay()); // the pointer moved over her and she never heard of it
@@ -1377,24 +1122,18 @@ function registerIpc() {
   ipcMain.handle('config:set', (_e, patch) => updateConfig(patch));
   ipcMain.handle('demo:window', (_e, open) => demoWindow(open));
   // right-clicking her: the same menu as the tray icon (which Windows often hides behind the ^ by the clock)
-  ipcMain.on('menu:open', () => openThemedMenu());
-  ipcMain.on('menu:close', () => closeThemedMenu());
+  // The themed menu is drawn inside her own overlay (renderer/js/menu.js): no second window, so nothing
+  // covers her, takes the focus or goes away while a button is down. Main only hands over the items
+  // of the tray menu and runs the one that was picked.
+  ipcMain.handle('menu:items', () => {
+    if (!trayMenu) return [];
+    const pack = collectMenuActions(trayMenu);
+    menuActions = pack.actions;
+    return pack.items;
+  });
   ipcMain.on('menu:action', (_e, id) => {
     const fn = menuActions && menuActions.get(id);
-    closeThemedMenu();
     setTimeout(() => { try { fn && fn(); } catch (err) { console.error('menu action', err); } }, 30);
-  });
-  ipcMain.on('menu:resize', (_e, dim) => {
-    if (!menuWin || menuWin.isDestroyed() || !dim) return;
-    const w = Math.max(240, Math.min(420, Math.round(dim.width || 300)));
-    const h = Math.max(120, Math.min(Math.round((targetDisplay().workArea.height) * 0.9), Math.round(dim.height || 400)));
-    const wa = targetDisplay().workArea;
-    menuWin.setBounds({
-      width: w,
-      height: h,
-      x: Math.round(wa.x + (wa.width - w) / 2),
-      y: Math.round(wa.y + (wa.height - h) / 2),
-    });
   });
 
   // her welcome panel's buttons
@@ -1874,8 +1613,30 @@ function applyRender() {
   if (DEV) app.whenReady().then(() => setTimeout(() => console.log('[capri] display:', render, JSON.stringify(app.getGPUFeatureStatus())), 4000));
 }
 
+// One failed promise or one bad line in a timer must not take her down: logged, and she goes on.
+process.on('uncaughtException', (err) => console.error('[capri] uncaught:', err));
+process.on('unhandledRejection', (err) => console.error('[capri] unhandled rejection:', err));
+
+// The graphics process dying over and over (a driver reset, hybrid-graphics trouble) takes her window
+// with it: after 3 in 10 minutes she starts drawing without the graphics card (menu › Display).
+let gpuCrashes = [];
+function watchGpuCrashes() {
+  app.on('child-process-gone', (_e, details) => {
+    if (details.type !== 'GPU' || ['clean-exit', 'killed'].includes(details.reason)) return;
+    console.error('[capri] GPU process gone:', details.reason);
+    const now = Date.now();
+    gpuCrashes = gpuCrashes.filter((t) => now - t < 600000).concat(now);
+    if (gpuCrashes.length >= 3 && config.load().render !== 'software') {
+      config.save({ render: 'software' });
+      app.relaunch();
+      app.exit(0);
+    }
+  });
+}
+
 function main() {
   applyRender();
+  watchGpuCrashes();
   if (!app.requestSingleInstanceLock()) {
     app.quit();
     return;
@@ -1891,6 +1652,7 @@ function main() {
     createTray();
     windowWatch = startWindowWatch({
       overlay,
+      ignore: () => [], // no window of ours to leave out anymore (the menu is drawn inside her overlay)
       onUpdate: (data) => {
         // a click on the taskbar brings it up over her: sitting on it, her legs would vanish behind it
         if (data.taskbar && !lastWindows?.taskbar && config.load().rest === 'taskbar') raiseOverlay();
@@ -1905,10 +1667,13 @@ function main() {
       onDebug: DEV ? debugHandler : null,
     });
     globalShortcut.register('Control+Alt+C', () => toggleVisible());
+    globalShortcut.register('Control+Alt+D', () => pointerDiag('hotkey')); // when she can't be clicked: writes pointer-debug.log
     if (!globalShortcut.register('Control+Alt+X', locateCapri)) console.warn('[capri] Ctrl+Alt+X is taken by another app');
     llm.restoreClaude(readMemory().claude);
     ollama.configure(config.load());
-    preloadSelectedModel().catch(() => {});
+    // the discrete graphics card (most VRAM) does the model's work, not the one built into the CPU:
+    // chosen before anything loads, so an Ollama this app starts afterwards inherits it
+    ollama.pickComputeGpu().catch(() => {}).then(() => preloadSelectedModel()).catch(() => {});
     armNews();
     setTimeout(() => morningRainTip().catch(() => {}), 25000); // once her intro and welcome are done
     setTimeout(() => launch.launchables().catch(() => {}), 20000); // what she can open, before you ask

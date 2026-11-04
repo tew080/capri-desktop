@@ -46,7 +46,7 @@ async function gpus() {
 let ioCache = { at: 0, io: null };
 async function diskIo() {
   if (process.platform !== 'win32') return null;
-  if (Date.now() - ioCache.at < 2500) return ioCache.io;
+  if (Date.now() - ioCache.at < 6000) return ioCache.io; // a PowerShell per read: not more often than this
   ioCache.at = Date.now(); // one at a time: a slow read isn't started again
   // the WMI class is the same on every Windows language (typeperf / Get-Counter names are translated)
   const out = await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',

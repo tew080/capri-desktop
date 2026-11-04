@@ -114,13 +114,39 @@ async function freeModels() {
 
 // --- VRAM and context ----------------------------------------------------------------------------
 // NVIDIA only (nvidia-smi). Without it: null, and 'auto' falls back to 8192.
+let computeGpu = null; // nvidia-smi index of the card that does the work (null: the only one, or unknown)
+
 function gpuMemory() {
   return new Promise((resolve) => {
-    execFile('nvidia-smi', ['--query-gpu=memory.total,memory.used', '--format=csv,noheader,nounits'],
-      { timeout: 3000, windowsHide: true }, (err, out) => {
+    const args = ['--query-gpu=memory.total,memory.used', '--format=csv,noheader,nounits'];
+    if (computeGpu != null) args.push('-i', String(computeGpu));
+    execFile('nvidia-smi', args, { timeout: 3000, windowsHide: true }, (err, out) => {
+      if (err) return resolve(null);
+      const [total, used] = String(out).split('\n')[0].split(',').map(Number);
+      resolve(total ? { total: total * 2 ** 20, used: used * 2 ** 20 } : null);
+    });
+  });
+}
+
+// Laptops and desktops with two cards: the model should run on the discrete one (the most VRAM), not
+// on the one inside the CPU. NVIDIA: with several CUDA cards the biggest is the only one Ollama may
+// see (CUDA_VISIBLE_DEVICES, in PCI order so nvidia-smi's index and CUDA's agree). A card that
+// the user already restricted (CUDA_VISIBLE_DEVICES set) is left alone. Ollama already running
+// keeps its own environment: set the same variable there.
+function pickComputeGpu() {
+  return new Promise((resolve) => {
+    if (process.env.CUDA_VISIBLE_DEVICES) return resolve(null);
+    execFile('nvidia-smi', ['--query-gpu=index,memory.total', '--format=csv,noheader,nounits'],
+      { timeout: 4000, windowsHide: true }, (err, out) => {
         if (err) return resolve(null);
-        const [total, used] = String(out).split('\n')[0].split(',').map(Number);
-        resolve(total ? { total: total * 2 ** 20, used: used * 2 ** 20 } : null);
+        const cards = String(out).split('\n').map((l) => l.split(',').map((x) => Number(x.trim())))
+          .filter(([i, mem]) => Number.isFinite(i) && mem > 0);
+        if (cards.length < 2) return resolve(null);
+        const best = cards.reduce((a, b) => (b[1] > a[1] ? b : a));
+        computeGpu = best[0];
+        process.env.CUDA_DEVICE_ORDER ??= 'PCI_BUS_ID';
+        process.env.CUDA_VISIBLE_DEVICES = String(best[0]);
+        resolve(best[0]);
       });
   });
 }
@@ -323,4 +349,4 @@ async function status(model) {
   return where && { ...where, gpuTotal: gpu?.total || 0, gpuUsed: gpu?.used || 0 };
 }
 
-module.exports = { base, models, isCloud, isLoaded, account, freeModels, warm, chat, canSee, configure, status, PRESETS };
+module.exports = { pickComputeGpu, base, models, isCloud, isLoaded, account, freeModels, warm, chat, canSee, configure, status, PRESETS };

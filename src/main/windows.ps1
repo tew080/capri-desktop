@@ -77,7 +77,7 @@ public static class CapriWindows {
     game = "";
     uint pid;
     GetWindowThreadProcessId(fg, out pid);
-    try { proc = System.Diagnostics.Process.GetProcessById((int)pid).ProcessName.ToLowerInvariant(); } catch {}
+    proc = NameOf(pid);
     IntPtr h = OpenProcess(0x1000, false, pid); // PROCESS_QUERY_LIMITED_INFORMATION
     if (h == IntPtr.Zero) return;
     var path = new StringBuilder(1024);
@@ -87,6 +87,22 @@ public static class CapriWindows {
       if (m.Success && !NOT_GAME.IsMatch(m.Groups[1].Value)) game = m.Groups[1].Value;
     }
     CloseHandle(h);
+  }
+
+  // pid -> program name, kept 30 s: a snapshot every 150 ms made a Process object (and its handle) per
+  // window per snapshot and never let go of them
+  static readonly Dictionary<uint, string> names = new Dictionary<uint, string>();
+  static DateTime namesAt = DateTime.Now;
+  static string NameOf(uint pid) {
+    if ((DateTime.Now - namesAt).TotalSeconds > 30) { names.Clear(); namesAt = DateTime.Now; }
+    string n;
+    if (names.TryGetValue(pid, out n)) return n;
+    n = "";
+    try {
+      using (var p = System.Diagnostics.Process.GetProcessById((int)pid)) n = p.ProcessName.ToLowerInvariant();
+    } catch {}
+    names[pid] = n;
+    return n;
   }
 
   static string Json(string s) {
@@ -123,6 +139,18 @@ public static class CapriWindows {
   // The AI a title is about, or null. A page only mentioning an AI ("Claude vs ChatGPT - YouTube")
   // is not that AI: the name has to be the site / app name, which is the last part of the title
   // ("Some chat - Claude", "Gemini", "Microsoft Copilot"), or the whole title.
+  static Regex[] strictRx;
+  static Regex[] wholeRx;
+  static void BuildAiRegexes() {
+    strictRx = new Regex[AIS.Length];
+    wholeRx = new Regex[AIS.Length];
+    for (int i = 0; i < AIS.Length; i++) {
+      string name = AIS[i][1].Replace(@"\b", "");
+      strictRx[i] = new Regex("^(?:" + name + ")(?:\\s+\\S+){0,2}$", RegexOptions.IgnoreCase);
+      wholeRx[i] = new Regex("^(?:" + name + ")$", RegexOptions.IgnoreCase);
+    }
+  }
+
   static string AiByTitle(string title) {
     if (string.IsNullOrEmpty(title)) return null;
     string t = BROWSER_TAIL.Replace(title.Trim(), "");
@@ -130,12 +158,12 @@ public static class CapriWindows {
     string last = VENDOR.Replace(parts[parts.Length - 1].Trim(), "");
     // (the browser's profile name left at the end, "Personal": the site is the part before it)
     string before = (parts.Length >= 2 && last.Length <= 14) ? VENDOR.Replace(parts[parts.Length - 2].Trim(), "") : "";
-    foreach (var ai in AIS) {
-      string name = ai[1].Replace(@"\b", "");
-      var strict = new Regex("^(?:" + name + ")(?:\\s+\\S+){0,2}$", RegexOptions.IgnoreCase);
-      var whole = new Regex("^(?:" + name + ")$", RegexOptions.IgnoreCase);
+    if (strictRx == null) BuildAiRegexes();
+    for (int i = 0; i < AIS.Length; i++) {
+      var strict = strictRx[i];
+      var whole = wholeRx[i];
       // ("DeepSeek - Into the Unknown": the name first, then a slogan)
-      if (strict.IsMatch(last) || (before != "" && whole.IsMatch(before)) || (parts.Length == 2 && whole.IsMatch(VENDOR.Replace(parts[0].Trim(), "")))) return ai[0];
+      if (strict.IsMatch(last) || (before != "" && whole.IsMatch(before)) || (parts.Length == 2 && whole.IsMatch(VENDOR.Replace(parts[0].Trim(), "")))) return AIS[i][0];
     }
     return null;
   }
@@ -300,7 +328,6 @@ public static class CapriWindows {
     lock (gate) sb.Append(",\"plug\":").Append(plug);
     sb.Append(",\"wins\":[");
     int count = 0;
-    var procCache = new Dictionary<uint, string>();
     EnumWindows((h, l) => {
       if (count >= 40) return false;
       if (h.ToInt64() == self || !IsWindowVisible(h) || IsIconic(h)) return true;
@@ -316,12 +343,7 @@ public static class CapriWindows {
       if (DwmGetWindowAttribute(h, DWMWA_EXTENDED_FRAME_BOUNDS, out r, 16) != 0) return true;
       if (r.Right - r.Left < 200 || r.Bottom - r.Top < 120) return true;
       uint pid; GetWindowThreadProcessId(h, out pid);
-      string pname = "";
-      if (!procCache.TryGetValue(pid, out pname)) {
-        try { pname = System.Diagnostics.Process.GetProcessById((int)pid).ProcessName.ToLowerInvariant(); }
-        catch { pname = ""; }
-        procCache[pid] = pname;
-      }
+      string pname = NameOf(pid);
       if (count > 0) sb.Append(',');
       count++;
       sb.Append("{\"id\":").Append(h.ToInt64())
@@ -418,7 +440,7 @@ $script:mediaAt = 0
 $script:mediaLastLog = ''
 function Update-CapriMedia {
   $now = [Environment]::TickCount
-  if ($script:mediaAt -ne 0 -and (($now - $script:mediaAt) -band 0x7fffffff) -lt 1000) { return }
+  if ($script:mediaAt -ne 0 -and (($now - $script:mediaAt) -band 0x7fffffff) -lt 3000) { return }
   $script:mediaAt = $now
 
   # 1) Media apps by process name OR window title (minimized OK)
@@ -429,7 +451,8 @@ function Update-CapriMedia {
   # window-title patterns — only used when process is a known browser OR title clearly media
   $titlePat = '(?i)youtube\s*music|youtube|spotify|vlc media|foobar2000|groove music|apple music|itunes|tidal|deezer|soundcloud|bandcamp|netflix|disney\+|disney plus|prime video|twitch|bilibili|niconico|joox|kkbox|line.?music|melon|genie|bugs|amazon music|pandora|mixcloud|hearthis|audius|yt.?music'
   try {
-    foreach ($p in (Get-Process -ErrorAction SilentlyContinue)) {
+    $procs = @(Get-Process -ErrorAction SilentlyContinue)
+    foreach ($p in $procs) {
       $low = ([string]$p.ProcessName).ToLower()
       $title = [string]$p.MainWindowTitle
       $hit = $false
@@ -450,7 +473,10 @@ function Update-CapriMedia {
       }
       if ($hit) { $running = $true; break }
     }
-  } catch {}
+  } catch {} finally {
+    # Get-Process hands out a Process object (a handle) per process: let them go, every time
+    foreach ($p in $procs) { try { $p.Dispose() } catch {} }
+  }
 
   # 2) SMTC (optional — on this machine it may throw; that's ok)
   $playing = $null
@@ -527,9 +553,10 @@ function Update-CapriMedia {
 
 $last = ''
 $tick = 0
+$still = 0
 Update-CapriMedia
 while ($true) {
-  if ($tick % 6 -eq 0) { Update-CapriMedia }
+  if ($tick % 6 -eq 0) { Update-CapriMedia } # (it keeps its own 3 s pace)
   $snap = Add-BrowserAi ([CapriWindows]::Snapshot($Self))
   if ($snap.EndsWith('}')) {
     $snap = $snap.Substring(0, $snap.Length - 1) + ',"media":' + $script:mediaJson + '}'
@@ -538,8 +565,12 @@ while ($true) {
     [Console]::Out.WriteLine($snap)
     [Console]::Out.Flush()
     $last = $snap
+    $still = 0
+  } else {
+    $still++
   }
   $tick++
   if ($ParentPid -and ($tick % 20 -eq 0) -and -not (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue)) { break }
-  Start-Sleep -Milliseconds 150
+  # nothing has moved for 2 s: looked at less often (300 ms) until something does
+  if ($still -gt 13) { Start-Sleep -Milliseconds 300 } else { Start-Sleep -Milliseconds 150 }
 }

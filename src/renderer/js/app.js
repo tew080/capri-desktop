@@ -2,6 +2,7 @@ import { Capri } from './capri.js';
 import { FxLayer, GRAB_FRAMES } from './fx.js';
 import { Chip, Mask } from './chip.js';
 import { Panel } from './panel.js';
+import { ThemedMenu } from './menu.js';
 import { Voice } from './voice.js';
 import { Brain } from './brain.js';
 import { Guide } from './guide.js';
@@ -74,6 +75,9 @@ async function boot() {
   const chip = new Chip(document.getElementById('chip'));
   chip.place(innerWidth, innerHeight - floorGap);
   const mask = new Mask(document.getElementById('mask'));
+  // her right-click menu, drawn here in her overlay (menu.js): she stays clickable while it is open
+  const menu = new ThemedMenu({ host });
+  menu.onChange = () => refreshHit();
 
   const voice = new Voice();
   voice.configure(config);
@@ -111,8 +115,32 @@ async function boot() {
     host.setInteractive(on);
   };
   const onChip = () => Boolean(chip.visible && mouse && chip.contains(mouse.x, mouse.y, 0));
+  // A left button held down keeps her clickable: she moves a little under a still pointer (breathing,
+  // the window she sits on), and if the hit test flipped to click-through between the press and
+  // the release, the release went to the window behind her and the click was lost.
+  // Only the left button — a right-click (menu) must not leave pressed stuck true, or the next
+  // left-click / drag never reaches her.
+  let pressed = false;
+  // the last mouse events that reached the page and what they landed on (window.dev.pointer, Ctrl+Alt+D)
+  const trace = [];
+  const describe = (el) => (el ? `${el.tagName.toLowerCase()}${el.id ? `#${el.id}` : ''}${typeof el.className === 'string' && el.className.trim() ? `.${el.className.trim().split(/\s+/).slice(0, 2).join('.')}` : ''}` : null);
+  for (const type of ['mousedown', 'mouseup', 'contextmenu', 'click']) {
+    window.addEventListener(type, (e) => {
+      trace.push({ type, b: e.button, bs: e.buttons, x: e.clientX, y: e.clientY, on: describe(e.target), at: performance.now() });
+      if (trace.length > 8) trace.shift();
+    }, true);
+  }
+  window.addEventListener('mousedown', (e) => { if (e.button === 0) pressed = true; }, true);
+  const released = () => {
+    if (!pressed) return;
+    pressed = false;
+    refreshHit();
+  };
+  window.addEventListener('mouseup', (e) => { if (e.button === 0) released(); }, true);
+  window.addEventListener('mousemove', (e) => { if (pressed && e.buttons === 0) released(); }, true);
+  window.addEventListener('blur', released);
   const refreshHit = () => {
-    if (capri.dragging) return setInteractive(true);
+    if (capri.dragging || pressed || menu.open) return setInteractive(true);
     if (!mouse) return setInteractive(false);
     const r = panel.rect();
     const onPanel = r && mouse.x >= r.left && mouse.x <= r.right && mouse.y >= r.top && mouse.y <= r.bottom;
@@ -181,7 +209,7 @@ async function boot() {
   }, WATCH_MS);
   window.addEventListener('contextmenu', (e) => {
     e.preventDefault();
-    if (chip.visible && chip.contains(e.clientX, e.clientY, 0)) host.openMenu();
+    if (chip.visible && chip.contains(e.clientX, e.clientY, 0)) menu.show();
   });
   window.addEventListener('click', (e) => {
     if (chip.visible && chip.contains(e.clientX, e.clientY, 0)) comeOut();
@@ -220,7 +248,7 @@ async function boot() {
   };
   panel.onChar = (kind) => voice.play('blip', { mood: kind });
   panel.onTalk = (talking) => talking && capri.perform('talk');
-  capri.onMenu = () => host.openMenu();
+  capri.onMenu = () => menu.show();
 
   // Her guide (guide.js): her welcome on first launch, and "How does it work?" in her menu,
   // where she takes you to things and points at them.
@@ -665,7 +693,13 @@ async function boot() {
   };
 
   // what's in here, for --dev scripts (debug route `eval`)
-  window.dev = { tts, capri, brain, panel, chat, guide, fx, voice, bond, jealousy, reminders, look, pc, setup, extras, screens: () => screens, memories: () => extras?.memories?.() };
+  window.dev = { pointer: () => ({
+    interactive, pressed, mouse, hit: mouse ? capri.hit(mouse.x, mouse.y) : null, busy: capri.busy, dragging: capri.dragging,
+    stance: capri.stance, hidden: capri.hidden, alpha: capri.p.alpha, act: Boolean(capri.act), refused: capri.refuseUntil > performance.now(),
+    pos: capri.pos,
+    under: mouse ? describe(document.elementFromPoint(mouse.x, mouse.y)) : null,
+    events: trace.map((e) => ({ ...e, at: undefined, agoS: Math.round((performance.now() - e.at) / 100) / 10 })),
+  }), tts, capri, brain, panel, chat, guide, fx, voice, bond, jealousy, reminders, look, pc, setup, extras, screens: () => screens, memories: () => extras?.memories?.() };
 
   // Global shortcut for status HUD (Capri window is click-through — renderer keys won't fire)
   // Main process should register: globalShortcut.register('CommandOrControl+Alt+S', () => sendCommand('statusHud'))
@@ -872,6 +906,8 @@ async function boot() {
         break;
       case 'rearmed': // a new mouse hook (main.js): click-through until the pointer comes over her again
         mouse = null;
+        pressed = false;
+        capri.resetPointer?.(); // a press whose release never reached her
         refreshHit();
         break;
       case 'rearm': // --dev: as if she'd noticed the pointer no longer reaches her
