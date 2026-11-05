@@ -27,6 +27,7 @@ const FEEDS = {
 const WORLD = FEEDS.en;
 const LANG_NAME = { th: 'Thai', en: 'English', fr: 'French', es: 'Spanish', pt: 'Brazilian Portuguese', ru: 'Russian' };
 const seen = []; // headlines already told, newest last
+let last = null; // { h, at }: the story she told last (timed or in chat), so "more details?" has something real to answer from
 
 // The levels, shortest first. `max`: characters a speech bubble may hold at that level.
 const LEVELS = {
@@ -74,8 +75,42 @@ function related(description, title) {
   return out.slice(0, 3);
 }
 
-async function headlines(lang, source) {
-  const url = source === 'world' ? WORLD : FEEDS[lang] || WORLD;
+// Topics she can be asked about ("tech news", "ข่าวสงคราม"): Google News has curated sections for the big
+// ones, and a search feed (last day only) for the rest. "ข่าวในไทย" asks for the Thai edition.
+const TOPICS = [
+  { re: /เทคโนโลยี|ไอที|ปัญญาประดิษฐ์|\btech(?:nology)?\b|\bAI\b/i, section: 'TECHNOLOGY', label: 'technology' },
+  { re: /เศรษฐกิจ|ธุรกิจ|หุ้น|การเงิน|ราคาน้ำมัน|ค่าเงิน|\b(?:business|econom\w*|markets?|stocks?|finance)\b/i, section: 'BUSINESS', label: 'business and economy' },
+  { re: /วิทยาศาสตร์|อวกาศ|\b(?:science|space)\b/i, section: 'SCIENCE', label: 'science' },
+  { re: /กีฬา|ฟุตบอล|บอล|\b(?:sports?|football|soccer|basketball)\b/i, section: 'SPORTS', label: 'sports' },
+  { re: /บันเทิง|ดารา|ภาพยนตร์|หนัง|\b(?:entertainment|celebrit\w*|movies?)\b/i, section: 'ENTERTAINMENT', label: 'entertainment' },
+  { re: /สุขภาพ|โรคระบาด|\b(?:health|covid)\b/i, section: 'HEALTH', label: 'health' },
+  { re: /สงคราม|สู้รบ|ความขัดแย้ง|\b(?:war|conflict|battle)\b/i, q: { th: 'สงคราม', en: 'war' }, label: 'war and conflict' },
+  { re: /ภัยพิบัติ|แผ่นดินไหว|น้ำท่วม|พายุ|ไฟป่า|สึนามิ|\b(?:disasters?|earthquakes?|floods?|storms?|hurricanes?|wildfires?|tsunami)\b/i,
+    q: { th: 'ภัยพิบัติ OR แผ่นดินไหว OR น้ำท่วม OR พายุ OR ไฟป่า', en: 'disaster OR earthquake OR flood OR storm OR wildfire' }, label: 'disasters' },
+  { re: /การเมือง|เลือกตั้ง|\b(?:politic\w*|elections?)\b/i, q: { th: 'การเมือง', en: 'politics' }, label: 'politics' },
+  { re: /อาชญากรรม|\bcrimes?\b/i, q: { th: 'อาชญากรรม', en: 'crime' }, label: 'crime' },
+];
+const THAI_NEWS = /ข่าว(?:ใน)?(?:ประเทศ)?ไทย|ในประเทศไทย|\b(?:thailand|thai news)\b/i;
+
+// What the user wants news about, read off their message: { section | q, label, thai } or null for "just the news".
+function topicOf(text) {
+  const t = String(text || '');
+  const thai = THAI_NEWS.test(t);
+  const hit = TOPICS.find((x) => x.re.test(t));
+  if (!hit && !thai) return null;
+  return { ...(hit || {}), label: [hit?.label, thai && 'Thailand'].filter(Boolean).join(' / '), thai };
+}
+
+function feedUrl(lang, source, topic) {
+  const key = topic?.thai ? 'th' : source === 'world' ? 'en' : (FEEDS[lang] ? lang : 'en');
+  const params = FEEDS[key].split('?')[1];
+  if (topic?.section) return `https://news.google.com/rss/headlines/section/topic/${topic.section}?${params}`;
+  if (topic?.q) return `https://news.google.com/rss/search?q=${encodeURIComponent(`${topic.q[key === 'th' ? 'th' : 'en']} when:1d`)}&${params}`;
+  return FEEDS[key];
+}
+
+async function headlines(lang, source, topic) {
+  const url = feedUrl(lang, source, topic);
   const res = await fetch(url, { signal: AbortSignal.timeout(10000), headers: { 'User-Agent': 'Mozilla/5.0' } });
   if (!res.ok) throw new Error(`news feed answered ${res.status}`);
   const xml = await res.text();
@@ -170,6 +205,7 @@ async function say({ lang, source, name, persona, detail, ask }) {
   if (!fresh) return null;
   seen.push(fresh.title);
   if (seen.length > 200) seen.shift();
+  last = { h: fresh, at: Date.now() };
   const messages = [...prompt(lang, name, persona, lv), { role: 'user', content: facts(fresh, lv) }];
   let line = String(await ask(messages) || '').replace(/[*_#`>]+/g, '').replace(/\s+/g, ' ').trim()
     .replace(/^["“«]+|["”»]+$/g, '');
@@ -181,18 +217,26 @@ async function say({ lang, source, name, persona, detail, ask }) {
   return line;
 }
 
-// For her chat: when you ask "what's the news?", the same real headline and the same level of detail
-// as the timed news, as a note for the AI, so it answers from the feed and invents nothing.
-// Returns the note text, or '' if the feed gave nothing / failed.
-async function chatNote({ lang, source, detail }) {
+// For her chat: when you ask "what's the news?" (or "tech news", "ข่าวสงคราม", "ข่าวในไทย"), a real headline
+// that fits what you asked, at the same level of detail as the timed news, as a note for the AI, so it
+// answers from the feed and invents nothing. A story already told is skipped, so asking again gives another.
+// Returns the note text, or '' if the feed failed.
+async function chatNote({ lang, source, detail, text }) {
   const lv = level(detail);
+  const topic = topicOf(text);
+  const language = LANG_NAME[lang] || 'English';
   try {
-    const list = (await headlines(lang, source)).slice(0, 3); // a few, so "any news?" has a choice
-    if (!list.length) return '';
-    list.forEach((h) => { if (!seen.includes(h.title)) seen.push(h.title); });
+    const list = (await headlines(lang, source, topic)).slice(0, 8);
+    if (!list.length) {
+      return topic
+        ? `You looked for the latest news about ${topic.label} and found nothing right now. Say so honestly in ${language}, in one short sentence, and offer the general news instead. Invent no news.`
+        : '';
+    }
+    const h = list.find((x) => !seen.includes(x.title)) || list[0];
+    if (!seen.includes(h.title)) seen.push(h.title);
     if (seen.length > 200) seen.splice(0, seen.length - 200);
-    const h = list[0];
-    return `Real news just fetched from Google News. Tell the user THIS ONE story in ${LANG_NAME[lang] || 'English'} (translate it if it is in another language). `
+    last = { h, at: Date.now() };
+    return `Real news just fetched from Google News${topic ? `, about ${topic.label}, as the user asked` : ''}. Tell the user THIS ONE story in ${language} (translate it if it is in another language). `
       + `Length and parts: ${LEVELS[lv].rule} `
       + 'Use ONLY the facts below. Invent no numbers, names, causes, quotes or details, never say it is confirmed, no jokes if the news is sad. '
       + `Plain text, at most ${LEVELS[lv].max} characters.\n${facts(h, lv)}`;
@@ -205,7 +249,28 @@ async function chatNote({ lang, source, detail }) {
 // Does this message ask for the news? (Thai, English, French, Spanish, Portuguese, Russian)
 const NEWS_ASK = /ข่าว|\bnews\b|\bheadlines?\b|actualit[ée]s?|noticias|not[íi]cias|новост/i;
 // ...but not "search news about X" / "find photos of news" (that goes to Google's News tab in chat.js)
-const NEWS_ABOUT = /(?:ข่าว(?:เกี่ยวกับ|ของ|เรื่อง)|news (?:about|on|of)|ค้น|หา|search|find)/i;
+// Thai has no spaces between words: "หา" only counts at the start or after a space, so "ปัญหา" or "ตามหา" don't match.
+const NEWS_ABOUT = /(?:ข่าว(?:เกี่ยวกับ|ของ|เรื่อง)|news (?:about|on|of)|ค้น|(?:^|\s)หา|search|find)/i;
 const asksNews = (t) => NEWS_ASK.test(t) && !NEWS_ABOUT.test(t);
 
-module.exports = { say, chatNote, asksNews, DETAILS, DEFAULT_DETAIL };
+// "ไหนรายละเอียด", "สรุปข่าวนี้", "วิเคราะห์ข่าวนี้", "tell me more": a follow-up about the story she just told
+// (within 15 minutes). Checked BEFORE asksNews, because "ข่าวนี้" holds the word "ข่าว" too.
+const FOLLOW = /รายละเอียด|เพิ่มเติม|เล่าต่อ|ต่อสิ|ขยายความ|สรุป|วิเคราะห์|แนวโน้ม|ผลกระทบ|ข่าวนี้|เรื่องนี้|ข่าวเมื่อกี้|เรื่องเมื่อกี้|(?:this|that) (?:news|story)|more (?:detail|info)|details?\b|tell me more|go on|summari[sz]e|analy[sz]e|analysis|plus de d[ée]tails|m[aá]s detalles|mais detalhes|подробн/i;
+const ANALYSE = /วิเคราะห์|แนวโน้ม|ผลกระทบ|analy|trend|impact|why/i;
+const asksFollow = (t) => Boolean(last) && Date.now() - last.at < 15 * 60000 && FOLLOW.test(t) && !NEWS_ABOUT.test(t);
+
+// The note for that follow-up: only what the feed really gave about that one story. Nothing else is known,
+// so a small model has nothing to invent from, and is told to say so when there is no more.
+function followNote({ lang, text }) {
+  if (!last) return '';
+  const ask = ANALYSE.test(text || '')
+    ? 'They ask for an analysis or what it means: you only have these headlines, so give at most one cautious sentence on what they suggest, and say plainly you cannot know more than that. '
+    : 'They ask for more or a summary: say it in one or two short sentences from the data. ';
+  return 'The user is asking about the news story you just told. The ONLY real data about it is below; nothing else is known. '
+    + `Answer in ${LANG_NAME[lang] || 'English'} from it alone (translate if needed). ${ask}`
+    + 'If it holds nothing more than the headline, say honestly that you only have the headline. '
+    + 'Never add numbers, names, causes, places or details, never say it is confirmed, no jokes if the news is sad. '
+    + `Plain text, at most ${LEVELS.detailed.max} characters.\n${facts(last.h, 'detailed')}`;
+}
+
+module.exports = { say, chatNote, asksNews, asksFollow, followNote, topicOf, DETAILS, DEFAULT_DETAIL };

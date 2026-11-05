@@ -1292,7 +1292,7 @@ function registerIpc() {
     return { ok: true, provider, model, agent: provider === 'claude', local, warmup: provider === 'ollama' && local && !loaded };
   });
   // her answer, streamed to the overlay piece by piece as `chat:delta`
-  ipcMain.handle('chat:send', async (_e, { id, messages }) => {
+  ipcMain.handle('chat:send', async (_e, { id, messages: incoming }) => {
     const abort = new AbortController();
     chats.set(id, abort);
     try {
@@ -1302,6 +1302,21 @@ function registerIpc() {
         overlay?.webContents.send('chat:delta', { id, text });
       };
       const cfg = config.load();
+      // "what's the news?" / "tech news" / "ไหนรายละเอียด": a real headline that fits (news.js) goes in as a note by
+      // the user's message, so her model answers from the feed and invents nothing. Not through Claude Code.
+      let messages = incoming;
+      if (cfg.provider !== 'claude') {
+        const lastMsg = messages[messages.length - 1];
+        const said = String(lastMsg?.content || '').split('\n\n(Note for you')[0]; // only what the user typed
+        let note = '';
+        if (lastMsg?.role === 'user') {
+          const opts = { lang: resolveLang(cfg.lang), source: cfg.newsSource, detail: cfg.newsDetail };
+          // a follow-up on the story just told ("สรุปข่าวนี้") comes first: it holds the word "ข่าว" too
+          if (news.asksFollow(said)) note = news.followNote({ ...opts, text: said });
+          else if (news.asksNews(said)) note = await news.chatNote({ ...opts, text: said });
+        }
+        if (note) messages = [...messages.slice(0, -1), { ...lastMsg, content: `${lastMsg.content}\n\n(Note for you, never repeat it: ${note})` }];
+      }
       const text = await chatWithFallback(cfg, messages, send, abort.signal, () => streamed);
       if (cfg.provider === 'claude') saveMemory({ claude: llm.claudeMemory() });
       if (cfg.provider === 'ollama') refreshOllamaLine();
