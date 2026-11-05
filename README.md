@@ -1,4 +1,4 @@
-**English** · [Français](README.fr.md)
+**English** · [ไทย](README.th.md) · [Français](README.fr.md)
 
 # Capri
 
@@ -59,6 +59,8 @@ glitches, comments on every action, comes to find you when it needs your permiss
 - **She sits on your windows**: perched on the top edge of a window, legs dangling and kicking one after the other.
   She rides along when you move the window, and falls off when you close, minimize or cover it.
   While Claude works she settles on the window in front if she can.
+- **She claims the window that just shrank**: when a window is resized or restored, she can pick the smallest
+  free spot on it, sit there with a little claim effect, then go back to where she was.
 - **She peeks in from the edges of the screen**: half hidden on the left or right, or hanging upside down from the top.
   She's shy: get your mouse close and she ducks away to another edge.
 - **She falls**: stretched, mane blown up, accelerating, then a big squash and a shower of shards when she lands.
@@ -164,6 +166,15 @@ itself: your messages go to `claude -p` in the folder you pick, continuing one c
 does. In that last one, permission mode `default` only lets it read (nobody is there to say yes); `acceptEdits` lets it
 edit files without asking. **Forget our conversations** clears what she remembers of your chats.
 
+**Tuning for Ollama.** Her menu › **AI model** has presets for Ollama (GPU and context size), a line telling you what is
+loaded, and a choice of **vision model** for when she looks at your screen. She warms the model up at startup so her first
+answer isn't slow, and picks your discrete NVIDIA card when there is one.
+
+**She remembers the conversation.** "What did I ask you?" or "what did we talk about?" is answered from the real history
+(in any wording), not from the model, and a rolling summary keeps long chats coherent. Reminders can repeat, and can be
+listed, edited or cancelled from the chat (duplicates are caught). Web searches, maps, weather and the news go through
+her chat too.
+
 **It's AI.** Her replies are written by the model, not by the show's writers: it's a fan version of her, and the chat
 panel says so every time.
 
@@ -242,6 +253,77 @@ never kept or sent anywhere, only the name it matched reaches her. Untick *Jealo
 chat opens, and her AI (even a small local model) answers in that mood. Mad or sulking, she stays that way until you say
 sorry ("sorry", "my bad"…), or it wears off.
 
+### She tells you the news
+
+Her menu › **News**: now and then she reads you a headline from Google News (RSS, no key, no account), in her voice
+and in your language. **News now** gives you one on demand, and you pick how often (off, or every few minutes) and the
+**Source**: the edition of your own language, or the world (English).
+
+**Detail** has four levels: headline, brief (the default), standard and detailed. Standard adds who reported it and how
+fresh it is; detailed adds what other outlets say and how sure the story is. It only ever uses what the feed really
+gave, with nothing invented. Long news scrolls inside her panel, and it stays up while your pointer is on it. Ask her
+about the news in her chat and she answers from the headlines she just fetched. Only the news text goes to her chat's AI.
+
+### She watches over your PC
+
+Her menu › **PC tools** (Windows). Each one also works from her chat:
+
+- **Check my PC**: a terminal-style card with the processor, RAM, graphics card, disks, uptime and more.
+- **What is using my PC**: the processes that weigh the most.
+- **Clear RAM** and **Clean junk files**: always behind a confirmation button. RAM is a best-effort trim of the
+  programs' working sets; cleanup opens Windows' Disk Cleanup and does a best-effort clean of your user temp folder.
+- **Readings when I hover her** (menu): pick what shows when your pointer rests on her: CPU, RAM, GPU and VRAM,
+  disk activity, disk, uptime, battery, network (CPU, battery and network by default).
+- **Weather and a morning umbrella tip**: today's weather in her chat (from wttr.in), and an optional heads-up when rain
+  is coming.
+- **Dance to music**: when music is playing, little animated notes float off her and she faces your pointer. Untick *Dance to music* to stop it.
+- **How often she invites you to talk**: never, rarely (~60 min), normal (~30), often (~15) or clingy (~5).
+- **Jealousy level**: not jealous, light, normal or heavy.
+
+### Network and security tools
+
+Her menu › **PC tools** › **Network (Nmap / Wireshark)**, only on **your own** machine and network. She uses
+[Nmap](https://nmap.org) and Wireshark's `tshark` if they are installed.
+
+- **Scan this PC's open ports** (and which ones can be reached from your network), **Who is on my network** (IP, name,
+  MAC, vendor), **Scan my router**, **Security check this PC**, **Scan a port range…**, **Detect OS of a device…**
+  and **Measure my connection speed**.
+- **Listen to my traffic (15 s)**: a short look at protocols, remote hosts and domains. Only metadata is read, the
+  capture is not promiscuous, and nothing is written to disk.
+- **Findings, not raw output**: each one says what it is, what it's doing now, whether anything uses it, why it's
+  unsafe and what can be done. They are joined into one risk picture (a score, the attack surface, correlations such as
+  an exposed database or a control panel, and prioritized actions).
+- **Public vulnerability lists**: she downloads CISA's *Known Exploited Vulnerabilities* catalog and matches it on your
+  PC; nothing from your scan is put in the request. Untick it in the menu.
+- **External scans** of a public host from her chat (services, TLS, OS, traceroute, and remediation advice): only after
+  you confirm, and only for hosts you own or have permission to test.
+- **Fixes are yours to approve**: only a short fixed list exists (add a firewall rule, switch a firewall profile on,
+  change a service's startup type), each with its reason and effect. Windows asks for administrator rights every time,
+  and every change goes into a tamper-evident log, so **Fix history / undo** can put it back. Nothing is deleted,
+  killed or uninstalled.
+- **Her AI can only read the results from a model on your PC.** With an online model, a cloud model or an API key, scan
+  results are never shared with it. A local model gets the facts plus numbered references, and whatever it writes that
+  isn't in them (a link, a CVE number) is removed before you see it.
+- **A tiny local proxy** (SOCKS5 or HTTP, on `127.0.0.1` only, with an optional domain blocklist) to see, count and block
+  what your own apps connect to. It's not a VPN and hides nothing by itself.
+
+### Mischief and the hack demo
+
+- **Mischief** (menu): when the PC has been idle for the time you pick, she gets bored and causes a little chaos
+  (glitches, bolts, glyph rain, cracks) with her catchphrases. Never while a video, a call, a game or a fullscreen app is
+  in front, never on a locked screen, and the moment you touch the mouse or keyboard she stops and cleans up.
+  **Mischief now (25 s)** runs it on demand.
+- **Hack demo (fake login page)**: a movie-scene simulation. A fake login page of her own (`ACME-TEST PORTAL`, an
+  address that can't resolve) and a make-believe dictionary attack, played out with her in it. Nothing is sent, nothing is
+  tested, no real site or password is involved. You can give her a hint, or turn on the page's rate limit and watch her
+  get locked out; it ends with a short lesson on why weak passwords lose. Start it from her menu › Mischief, or ask in her chat.
+
+### Her voice
+
+Her menu › **Her voice** (off until you pick one): **Silent**, **Cartoon babble** (squeaky blips, one per letter, in any
+language, made on your PC) or **Real speech** (Windows' own voice, pitched up; it needs a voice for the language, and
+without one she babbles instead). She reads her finished chat replies aloud.
+
 ### With the mouse
 
 She only catches the mouse on her actual body (pixel-precise): the rest of the screen works as usual.
@@ -252,13 +334,20 @@ She only catches the mouse on her actual body (pixel-precise): the rest of the s
 - **Ctrl+Alt+C**: she puts herself away (into her biochip, like in the show) and all that's left of her is her mask,
   eyes shut, in the bottom-left corner. Her eyes only open when Claude needs you. Click the mask (or Ctrl+Alt+C again)
   to bring her back.
+- **Ctrl+Alt+X**: "where is she?" She comes out of her biochip (if she was put away), goes to the middle of the
+  screen and says one line.
+- **Ctrl+Alt+D**: if she can't be clicked, this writes `pointer-debug.log` (in her data folder) so you can send it with an
+  issue. She also re-arms her pointer and her hotkeys on her own after sleep, unlock or a freeze.
 - **Her menu**: right-click her (it's also on her tray icon, next to the clock): teleport, look at the satellite, demo,
-  how it works, mission report, talk to her, look at your screen, reminders, size, sound, screen (and following you across screens), AI
-  model, wander, possess your windows, jealous of other AIs, react to my PC, language, start with Windows, hooks. At the very top:
+  how it works, mission report, talk to her, look at your screen, PC tools (check my PC, network), reminders, make her yours, size, sound, screen
+  (and following you across screens), AI model, wander, possess your windows, jealous of other AIs (and how much), readings on hover, how
+  often she invites you to chat, dance to music, react to my PC, her voice, morning umbrella tip, mischief, news, when she rests (in her
+  corner or on the taskbar), watch, animations, display, language, start with Windows, hooks. At the very top:
   where you two stand.
 
-She speaks **French, English, Spanish, Brazilian Portuguese and Russian**, and picks the language of your system on her
-own. You can choose another one in her menu.
+She speaks **Thai, English, French, Spanish, Brazilian Portuguese and Russian**. Thai is the default; pick another one
+in her menu (or *auto*, which follows your system's language). Her chat, her intents ("open", "remind me", "find my file")
+and her reminders understand Thai too, including Thai file and app names.
 
 ## Install
 
@@ -337,7 +426,7 @@ prompt, the end), then shows everything she does on her own, a line before each 
 zapping your pointer, the whole satellite sequence, possessing a window (a little terminal opens for her, then closes
 under her and she falls), sleeping down to her mask, and putting herself away in the bottom-left corner.
 It's also in the tray menu, in her language; from the command line it's in English, or add one: `npm run demo -- fr`
-(or `es`, `pt`, `ru`).
+(or `es`, `pt`, `ru`, `th`).
 
 ## Sounds
 
@@ -390,6 +479,8 @@ named like this (`.mp3`, `.wav`, `.ogg` or `.m4a`):
   HDR on; other overlay apps like Desktop Mate do it too there). Right-click her, or her icon by the clock › **Display**
   › **OpenGL**: she restarts drawn another way. Still black? **Without the graphics card**, which costs a bit more CPU.
   Turning off FXAA and MFAA in the NVIDIA Control Panel can fix it as well.
+- **She doesn't react to my clicks.** Press **Ctrl+Alt+D**: it writes `pointer-debug.log` next to her settings. She also
+  rebuilds her overlay by herself after sleep, unlock or a graphics crash, and when the app stalls for a moment.
 - **Can I turn her off?** Ctrl+Alt+C puts her away, **Quit** in her menu closes her. Claude Code works exactly the same
   without her.
 - **She only floats around and says idle things.** That's normal until Claude Code does something. If it never reacts,
@@ -397,7 +488,7 @@ named like this (`.mp3`, `.wav`, `.ogg` or `.m4a`):
 
 ## What leaves your machine
 
-Nothing. The hook only keeps what the display needs (tool name, file path, command, the start of your prompt,
+Nothing from your work. The hook only keeps what the display needs (tool name, file path, command, the start of your prompt,
 Claude's last message up to 6,000 characters so she can show it to you, all truncated) and sends it to `127.0.0.1` only.
 Your file contents are never sent: for a write, only its size goes through.
 
@@ -405,6 +496,11 @@ Her chat goes to Ollama on your PC (`127.0.0.1:11434`, or `OLLAMA_HOST`) with wh
 project's name, Claude's last action, today's counts). On one of Ollama's cloud models (the ones ending in `:cloud`),
 Ollama sends it on to its servers, and her chat says "online AI" instead of "local AI". Her mission log stays in her own storage on your PC, like your
 reminders and where you two stand.
+
+A few things go online, only when you use them: the news (a request to Google News' RSS), the weather (a request to
+wttr.in), CISA's public vulnerability catalog (a fixed download with nothing of yours in it; untick it in the menu), and, if
+she has no Windows voice for your language, the text of the line she reads aloud (sent to Google Translate's speech
+service). External scans only run after you confirm. Scan results never go to an online or cloud model.
 
 The title of the window in front of you is only checked, on your PC, against a list of AI names (for her jealousy):
 it's never kept or sent anywhere.
@@ -480,6 +576,13 @@ src/main/                Electron: full-screen transparent click-through window,
   windows.js / .ps1      where the other windows are (Windows only), so she can sit on them
   ollama.js              her chat: the local model through Ollama, or one of its cloud models
   apps.js                closing an app you asked her to close (after your click)
+  labels.js              the tray menu, in every language
+  news.js                headlines (Google News RSS) and how much she says about them
+  vitals.js              the readings she shows when you hover her
+  netscan.js / findings.js / correlate.js   Nmap and tshark, turned into findings and a risk picture
+  intel.js / evidence.js / privacy.js       CISA catalog, what her local model may read, and the gate that decides
+  remediate.js           the only place that changes the PC for security (whitelist, consent, tamper-evident log)
+  proxy.js               the small local SOCKS5 / HTTP proxy
 src/renderer/js/
   sprite.js              WebGL shader: head tilt, mane flare, sitting, smears, afterimages, colors, glitch
   acting.js              the exposure sheets: every move, drawing by drawing
@@ -495,9 +598,15 @@ src/renderer/js/
   look.js                she looks at your screen: asking first, the scan, what her AI says about it
   pc.js                  your PC as she feels it: the processor, the battery, the network, USB sticks, games
   files.js               finding your files (Windows search index), screenshots
-  lines.js               what she says (FR / EN / ES / PT / RU)
+  lines.js               what she says (TH / EN / FR / ES / PT / RU)
   chip.js                her mask: while she sleeps, and bottom left when you put her away
   voice.js               the sounds
+  tts.js                 her voice out loud (cartoon babble or real speech)
+  recall.js              answering "what did we talk about?" from the real history
+  mischief.js            idle-time chaos, with its safety checks
+  hacksim.js             the fake login page and the brute-force demo
+  extras.js              hover readings, window companion and other everyday touches
+  menu.js                the themed menu she opens when you right-click her
 ```
 
 To hack on it: `npm run dev` turns on debug routes on the bridge (`/debug/capture` saves a frame of the window to `captures/`,
@@ -518,4 +627,3 @@ her, change her and share what you made, for free. Selling Capri, or anything ma
 paid access, paid orders), is not allowed. Versions up to 0.4.3 were under the MIT License.
 
 Fonts: Chakra Petch and JetBrains Mono, under the SIL Open Font License, via Fontsource.
-
