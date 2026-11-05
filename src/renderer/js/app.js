@@ -191,6 +191,9 @@ async function boot() {
   let rearmedAt = -Infinity;
   let follow = null; // (pointer) => she may follow it to another screen (below)
   setInterval(async () => {
+    // main's click-through flag and this page's idea of it can drift apart (a rearm, a rebuild, a lost message):
+    // said again, it is a no-op when they agree and the fix when they don't
+    host.setInteractive(interactive);
     const at = await host.cursor().catch(() => null);
     const before = seen;
     seen = at;
@@ -700,13 +703,23 @@ async function boot() {
     // a button held (a drag that began in another app and ended on her).
     let downSeen = false;
     let lastMoveBs = 0;
+    let orphans = []; // times of releases with no press before them
     window.addEventListener('mousemove', (e) => { lastMoveBs = e.buttons; }, true);
-    window.addEventListener('mousedown', (e) => { if (e.button === 0) downSeen = true; }, true);
+    window.addEventListener('mousedown', (e) => { if (e.button === 0) { downSeen = true; orphans = []; } }, true); // a real click: input is fine
     window.addEventListener('mouseup', (e) => {
       if (e.button !== 0) return;
       const orphan = !downSeen && lastMoveBs === 0;
       downSeen = false;
-      if (orphan) host.rebuildOverlay?.();
+      if (!orphan) return;
+      // One of these happens in normal use (a press that went to the window behind her a few ms before she became
+      // clickable, a window or a selection dragged over her): the window is rebuilt only for two within 5 s
+      // with no real click between them.
+      const t = performance.now();
+      orphans = orphans.filter((x) => t - x < 5000).concat(t);
+      if (orphans.length >= 2) {
+        orphans = [];
+        host.rebuildOverlay?.();
+      }
     }, true);
   }
 
@@ -925,6 +938,7 @@ async function boot() {
       case 'rearmed': // a new mouse hook (main.js): click-through until the pointer comes over her again
         mouse = null;
         pressed = false;
+        interactive = false; // main made the window click-through: without this, refreshHit(true) below is skipped as "no change" and she stays unclickable while the page thinks she is not
         capri.resetPointer?.(); // a press whose release never reached her
         refreshHit();
         break;

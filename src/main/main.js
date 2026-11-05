@@ -209,12 +209,14 @@ function beginWindowWatch() {
 // the click-through flag and doesn't undo that, so the window is thrown away and made again.
 let rebuilding = false;
 let lastRebuild = 0;
+let rebuildCount = 0;
 function rebuildOverlay(reason, { force = false } = {}) {
   if (rebuilding || !overlay || overlay.isDestroyed()) return;
   if (!force && Date.now() - lastRebuild < 10000) return; // not in a loop
   rebuilding = true;
   lastRebuild = Date.now();
-  console.warn('[capri] overlay rebuilt:', reason);
+  rebuildCount++;
+  console.warn('[capri] overlay rebuilt:', reason, `(#${rebuildCount})`);
   try {
     windowWatch?.stop();
     const old = overlay;
@@ -887,6 +889,52 @@ function collectMenuActions(menu) {
   return { items, actions };
 }
 
+// Her global hotkeys. Registered again after sleep / unlock (and checked: register() says false when another
+// app already owns the combination, and nobody was told).
+const HOTKEYS = [
+  ['Control+Alt+C', () => toggleVisible()],
+  ['Control+Alt+D', () => pointerDiag('hotkey')], // when she can't be clicked: writes pointer-debug.log
+  ['Control+Alt+X', () => locateCapri()],
+];
+function registerHotkeys() {
+  for (const [key, fn] of HOTKEYS) {
+    try {
+      if (!globalShortcut.isRegistered(key)) {
+        if (!globalShortcut.register(key, fn)) console.warn(`[capri] ${key} is taken by another app`);
+      }
+    } catch (err) {
+      console.error('[capri] hotkey', key, err.message);
+    }
+  }
+}
+
+// Her pointer reaches her click-through window through a mouse hook that Windows removes, without a word,
+// when this (the main) thread is too slow to answer it (~300 ms). The same thread serves the hotkeys. So: how
+// long the main thread was blocked is measured here; a long stall means the hook may be gone and is put back.
+let lagWorst = 0;
+let lagStalls = 0;
+let lagLastAt = null;
+function watchMainThread() {
+  let last = Date.now();
+  setInterval(() => {
+    const now = Date.now();
+    const late = now - last - 500;
+    last = now;
+    if (late > lagWorst) lagWorst = late;
+    if (late < 250) return;
+    lagStalls++;
+    lagLastAt = new Date().toISOString();
+    console.warn(`[capri] main thread was blocked for ~${late} ms`);
+    try {
+      fs.appendFileSync(path.join(app.getPath('userData'), 'pointer-debug.log'), `${JSON.stringify({ t: lagLastAt, tag: 'main-stall', ms: late })}\n`);
+    } catch { /* a log */ }
+    if (late >= 300) { // long enough for Windows to have dropped the hook
+      rearmOverlay();
+      registerHotkeys();
+    }
+  }, 500).unref();
+}
+
 // Why can't she be clicked? One line of state, to the console and to <userData>/pointer-debug.log:
 // what main asked of her window, where the pointer is, and what her page thinks (window.dev.pointer, app.js).
 // Written on Ctrl+Alt+D (press it while the pointer is on her and the click fails).
@@ -897,7 +945,11 @@ async function pointerDiag(tag) {
     const b = overlay.getBounds();
     let page = null;
     try {
-      page = await overlay.webContents.executeJavaScript('window.dev && window.dev.pointer ? window.dev.pointer() : null');
+      // a hung renderer never answers: without the timeout this line (and the log file) would never be written
+      page = await Promise.race([
+        overlay.webContents.executeJavaScript('window.dev && window.dev.pointer ? window.dev.pointer() : null'),
+        new Promise((resolve) => setTimeout(() => resolve({ error: 'renderer did not answer in 2 s (hung or dead)' }), 2000)),
+      ]);
     } catch (err) {
       page = { error: err.message };
     }
@@ -905,6 +957,9 @@ async function pointerDiag(tag) {
       t: new Date().toISOString(), tag, ignore: overlayIgnore,
       overlay: { visible: overlay.isVisible(), focusable: overlay.isFocusable(), onTop: overlay.isAlwaysOnTop(), bounds: b },
       cursor: { x: cursor.x - b.x, y: cursor.y - b.y }, page,
+      mainLag: { worstMs: lagWorst, stalls: lagStalls, lastStallAt: lagLastAt },
+      keys: HOTKEYS.map(([k]) => [k, globalShortcut.isRegistered(k)]),
+      rebuilds: rebuildCount, rendererCrashes: rendererCrashes.length,
     });
     console.log('[capri] pointer', line);
     const file = path.join(app.getPath('userData'), 'pointer-debug.log');
@@ -1166,6 +1221,7 @@ function registerIpc() {
   ipcMain.on('overlay:rebuild', () => rebuildOverlay('mouseup without mousedown')); // her page saw it
   ipcMain.handle('overlay:cursor', () => {
     const p = screen.getCursorScreenPoint();
+    if (!overlay || overlay.isDestroyed()) return { x: 0, y: 0, inside: false, display: displayAt(p).id }; // being rebuilt
     const b = overlay.getBounds();
     const inside = p.x >= b.x && p.y >= b.y && p.x < b.x + b.width && p.y < b.y + b.height;
     return { x: p.x - b.x, y: p.y - b.y, inside, display: displayAt(p).id };
@@ -1236,8 +1292,7 @@ function registerIpc() {
     return { ok: true, provider, model, agent: provider === 'claude', local, warmup: provider === 'ollama' && local && !loaded };
   });
   // her answer, streamed to the overlay piece by piece as `chat:delta`
-  ipcMain.handle('chat:send', async (_e, { id, messages: incoming }) => {
-    let messages = incoming;
+  ipcMain.handle('chat:send', async (_e, { id, messages }) => {
     const abort = new AbortController();
     chats.set(id, abort);
     try {
@@ -1247,15 +1302,6 @@ function registerIpc() {
         overlay?.webContents.send('chat:delta', { id, text });
       };
       const cfg = config.load();
-      // "วันนี้มีข่าวอะไร": the real headline at the level of detail from the menu (news.js), not what the model remembers
-      const lastUser = messages.at(-1);
-      if (cfg.provider !== 'claude' && lastUser?.role === 'user' && typeof lastUser.content === 'string') {
-        const ask = lastUser.content.split('\n\n(Note for you')[0]; // chat.js adds its own note after the message
-        if (news.asksNews(ask)) {
-          const note = await news.chatNote({ lang: resolveLang(cfg.lang), source: cfg.newsSource, detail: cfg.newsDetail });
-          messages = [...messages.slice(0, -1), { ...lastUser, content: `${lastUser.content}\n\n(${note || 'You tried to fetch the news but it failed. Say so briefly in character and never make up any news.'})` }];
-        }
-      }
       const text = await chatWithFallback(cfg, messages, send, abort.signal, () => streamed);
       if (cfg.provider === 'claude') saveMemory({ claude: llm.claudeMemory() });
       if (cfg.provider === 'ollama') refreshOllamaLine();
@@ -1691,6 +1737,9 @@ async function debugHandler(route, body) {
 // without the graphics card, often fixes it.
 function applyRender() {
   const { render } = config.load();
+  // her window is transparent and mostly covered by others: Chromium must not decide it is hidden and stop drawing it
+  app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
+  app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
   if (render === 'gl') app.commandLine.appendSwitch('use-angle', 'gl');
   if (render === 'software') {
     app.disableHardwareAcceleration();
@@ -1744,9 +1793,8 @@ function main() {
       onEvent: (evt) => !llm.isChatSession(evt.session_id) && overlay?.webContents.send('claude:event', evt),
       onDebug: DEV ? debugHandler : null,
     });
-    globalShortcut.register('Control+Alt+C', () => toggleVisible());
-    globalShortcut.register('Control+Alt+D', () => pointerDiag('hotkey')); // when she can't be clicked: writes pointer-debug.log
-    if (!globalShortcut.register('Control+Alt+X', locateCapri)) console.warn('[capri] Ctrl+Alt+X is taken by another app');
+    registerHotkeys();
+    watchMainThread();
     llm.restoreClaude(readMemory().claude);
     ollama.configure(config.load());
     // the discrete graphics card (most VRAM) does the model's work, not the one built into the CPU:
@@ -1766,10 +1814,15 @@ function main() {
     screen.on('display-added', screensChanged);
     screen.on('display-removed', screensChanged);
     // after sleep or a locked screen, once Windows has settled
-    powerMonitor.on('resume', () => setTimeout(() => rebuildOverlay('resume', { force: true }), 400));
+    powerMonitor.on('resume', () => {
+      registerHotkeys();
+      setTimeout(registerHotkeys, 3000);
+      setTimeout(() => rebuildOverlay('resume', { force: true }), 400);
+    });
     powerMonitor.on('lock-screen', () => { screenLocked = true; });
     powerMonitor.on('unlock-screen', () => {
       screenLocked = false;
+      registerHotkeys();
       setTimeout(() => rebuildOverlay('unlock'), 300);
     });
   });
