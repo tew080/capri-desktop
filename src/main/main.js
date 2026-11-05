@@ -442,6 +442,35 @@ function updateConfig(patch) {
 // News she tells now and then (news.js): every `newsEvery` minutes, when you're at your PC and she's
 // not busy talking. `force`: from her menu, right now, and she says if it fails.
 let newsTimer = null;
+// Menu text for the level of detail (labels.js has none of these yet: English where a language has none)
+const NEWS_DETAIL = {
+  th: { title: 'ความละเอียดของข่าว', levels: {
+    headline: 'พาดหัว: บอกแค่ว่าเกิดอะไรขึ้น', brief: 'สั้น: ใจความ + แซวนิดเดียว',
+    standard: 'มาตรฐาน: ใจความ + ใคร/ที่ไหน/เมื่อไหร่ + สำนักข่าว + เวลา',
+    detailed: 'ละเอียด: เพิ่มสิ่งที่สำนักข่าวอื่นรายงาน + ความน่าเชื่อถือ' } },
+  en: { title: 'News detail', levels: {
+    headline: 'Headline: just what happened', brief: 'Brief: the gist + a tiny tease',
+    standard: 'Standard: gist + who/where/when + outlet + time',
+    detailed: 'Detailed: + what other outlets say + how sure it is' } },
+  fr: { title: 'Détail des infos', levels: {
+    headline: 'Titre : juste ce qui s’est passé', brief: 'Court : l’essentiel + une petite taquinerie',
+    standard: 'Standard : essentiel + qui/où/quand + média + heure',
+    detailed: 'Détaillé : + ce que disent les autres médias + fiabilité' } },
+  es: { title: 'Detalle de las noticias', levels: {
+    headline: 'Titular: solo lo que pasó', brief: 'Breve: lo esencial + una pequeña broma',
+    standard: 'Estándar: lo esencial + quién/dónde/cuándo + medio + hora',
+    detailed: 'Detallado: + lo que dicen otros medios + grado de certeza' } },
+  pt: { title: 'Detalhe das notícias', levels: {
+    headline: 'Manchete: só o que aconteceu', brief: 'Curto: o essencial + uma provocação',
+    standard: 'Padrão: essencial + quem/onde/quando + veículo + hora',
+    detailed: 'Detalhado: + o que outros veículos dizem + grau de certeza' } },
+  ru: { title: 'Подробность новостей', levels: {
+    headline: 'Заголовок: только что случилось', brief: 'Кратко: суть + лёгкая шутка',
+    standard: 'Стандарт: суть + кто/где/когда + СМИ + время',
+    detailed: 'Подробно: + что пишут другие СМИ + степень достоверности' } },
+};
+const newsDetailText = (cfg) => NEWS_DETAIL[resolveLang(cfg.lang)] || NEWS_DETAIL.en;
+
 function armNews() {
   clearTimeout(newsTimer);
   const mins = Number(config.load().newsEvery) || 0;
@@ -466,6 +495,7 @@ async function tellNews({ force = false } = {}) {
     const line = await news.say({
       lang: resolveLang(cfg.lang),
       source: cfg.newsSource,
+      detail: cfg.newsDetail,
       name: cfg.userName,
       persona: cfg.persona,
       ask: (messages) => llm.chat(cfg.provider, llmConfig(cfg), { model, messages }, () => {}, AbortSignal.timeout(90000)),
@@ -751,6 +781,13 @@ function rebuildTray() {
         { label: t.newsSource, enabled: false },
         ...[['local', t.newsLocal], ['world', t.newsWorld]].map(([source, label]) => ({
           label, type: 'radio', checked: (cfg.newsSource || 'local') === source, click: () => updateConfig({ newsSource: source }),
+        })),
+        { type: 'separator' },
+        // how much she says about each story (news.js: the parts of a news summary each level adds)
+        { label: newsDetailText(cfg).title, enabled: false },
+        ...news.DETAILS.map((key) => ({
+          label: newsDetailText(cfg).levels[key], type: 'radio', checked: (cfg.newsDetail || news.DEFAULT_DETAIL) === key,
+          click: () => updateConfig({ newsDetail: key }),
         })),
       ],
     },
@@ -1199,7 +1236,8 @@ function registerIpc() {
     return { ok: true, provider, model, agent: provider === 'claude', local, warmup: provider === 'ollama' && local && !loaded };
   });
   // her answer, streamed to the overlay piece by piece as `chat:delta`
-  ipcMain.handle('chat:send', async (_e, { id, messages }) => {
+  ipcMain.handle('chat:send', async (_e, { id, messages: incoming }) => {
+    let messages = incoming;
     const abort = new AbortController();
     chats.set(id, abort);
     try {
@@ -1209,6 +1247,15 @@ function registerIpc() {
         overlay?.webContents.send('chat:delta', { id, text });
       };
       const cfg = config.load();
+      // "วันนี้มีข่าวอะไร": the real headline at the level of detail from the menu (news.js), not what the model remembers
+      const lastUser = messages.at(-1);
+      if (cfg.provider !== 'claude' && lastUser?.role === 'user' && typeof lastUser.content === 'string') {
+        const ask = lastUser.content.split('\n\n(Note for you')[0]; // chat.js adds its own note after the message
+        if (news.asksNews(ask)) {
+          const note = await news.chatNote({ lang: resolveLang(cfg.lang), source: cfg.newsSource, detail: cfg.newsDetail });
+          messages = [...messages.slice(0, -1), { ...lastUser, content: `${lastUser.content}\n\n(${note || 'You tried to fetch the news but it failed. Say so briefly in character and never make up any news.'})` }];
+        }
+      }
       const text = await chatWithFallback(cfg, messages, send, abort.signal, () => streamed);
       if (cfg.provider === 'claude') saveMemory({ claude: llm.claudeMemory() });
       if (cfg.provider === 'ollama') refreshOllamaLine();

@@ -176,6 +176,10 @@ function netAsk(text) {
   if (NET_LAN.test(text) && !NET_SELF.test(text)) return { what: 'net:lan' };
   return { what: 'net' };
 }
+// "วันนี้มีข่าวอะไร": main.js adds the real headline (news.js); the answer is long on purpose, so stopLoop must not cut it to 120 characters
+const NEWS_ASK = /ข่าว|\bnews\b|\bheadlines?\b|actualit[ée]s?|noticias|not[íi]cias|новост/i;
+const NEWS_ABOUT = /(?:ข่าว(?:เกี่ยวกับ|ของ|เรื่อง)|news (?:about|on|of)|ค้น|หา|search|find)/i;
+const newsAsked = (t) => NEWS_ASK.test(t) && !NEWS_ABOUT.test(t);
 const WEATHER_ASK = /อากาศ|ฝนตก|ฝนจะตก|ร้อนไหม|หนาวไหม|อุณหภูมิข้างนอก|\bweather\b|will it rain|is it raining|temperature outside|forecast/i;
 const WEATHER_NOT = /เครื่อง|คอม|พีซี|\bcpu\b|\bgpu\b|\bpc\b|computer|ซีพียู|การ์ดจอ/i;
 const WEATHER_PLACE = /(?:ที่|ใน|ของ|\bat\b|\bin\b|\bfor\b)\s*([\p{L}\p{M}][\p{L}\p{M} ]{1,30}?)\s*(?:วันนี้|ตอนนี้|หน่อย|ไหม|[?!.]|$)/iu;
@@ -727,7 +731,7 @@ export class Chat {
     // a looping answer never goes into her memory: it would teach the next one to loop
     const raw = polish(clean(res.text), this.lastAnswer(), this.brain.custom?.userName);
     const looped = /(ขอโทษนะ[\s\S]*){2,}|(ฉันคือ\s*Capri[\s\S]*){2,}/.test(raw) || LEAK.test(raw);
-    let answer = looped ? 'เมื่อกี้เบลอไปแป๊บ choom ลองพูดใหม่นะ' : (grounded ? raw : stopLoop(raw)) || 'อืม… ลองพูดอีกทีนะ';
+    let answer = looped ? 'เมื่อกี้เบลอไปแป๊บ choom ลองพูดใหม่นะ' : (grounded ? raw : newsAsked(text) && !this.agent ? stopLoop(raw, { max: 700, cutAtQuestion: false }) : stopLoop(raw)) || 'อืม… ลองพูดอีกทีนะ';
     // a recall answer that doesn't carry the real facts is a made-up one: the retrieved answer replaces it
     if (grounded && (looped || !verifyRecall(answer, facts))) answer = plain.line;
     this.warm = true;
@@ -2054,7 +2058,7 @@ export function clean(text) {
 }
 
 // Small models (7B) often loop the same phrase / emoji spam — cut the loop and keep the first coherent bit.
-export function stopLoop(text) {
+export function stopLoop(text, { max = 120, cutAtQuestion = true } = {}) {
   let s = String(text || '').replace(/\s+/g, ' ').trim();
   if (!s) return s;
 
@@ -2117,14 +2121,14 @@ export function stopLoop(text) {
   }
 
   // Keep only first "sentence-ish" beat if still long
-  if (s.length > 110) {
+  if (cutAtQuestion && s.length > 110) {
     const q = s.search(/[?？]/);
     if (q > 15 && q < 100) s = s.slice(0, q + 1).trim();
   }
 
   s = s.replace(/(?:\s*ขอโทษนะ)+\s*$/g, '').trim();
   s = s.replace(/\s+/g, ' ').trim();
-  if (s.length > 120) s = s.slice(0, 120).replace(/\s+\S*$/, '').trim();
+  if (s.length > max) s = s.slice(0, max).replace(/\s+\S*$/, '').trim();
   s = s.replace(/\s*(ฉันคือ|ขอโทษ|คนเก่ง|Capri)\s*$/u, '').trim();
   return s || plain.slice(0, 80);
 }
